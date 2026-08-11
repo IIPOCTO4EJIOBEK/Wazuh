@@ -1,0 +1,87 @@
+---
+# =====================================================================
+#  {{ indexer_node_name }} — узел кластера {{ indexer_cluster_name }}
+#  Файл управляется Ansible (roles/wazuh_indexer). Правки на узле
+#  перетираются при следующем прогоне.
+# =====================================================================
+
+cluster.name: "{{ indexer_cluster_name }}"
+node.name: "{{ indexer_node_name }}"
+network.host: "{{ ansible_host }}"
+http.port: {{ indexer_http_port }}
+transport.tcp.port: {{ indexer_transport_port }}
+
+path.data: {{ indexer_path_data }}
+path.logs: {{ indexer_path_logs }}
+
+# Все три узла хранят данные и участвуют в выборах мастера.
+# Кворум — 2 из 3: кластер переживает потерю любого одного узла.
+node.roles: ["cluster_manager", "data", "ingest"]
+
+discovery.seed_hosts:
+{% for h in groups['wazuh_indexer'] %}
+  - "{{ hostvars[h].ansible_host }}"
+{% endfor %}
+
+cluster.initial_cluster_manager_nodes:
+{% for h in groups['wazuh_indexer'] %}
+  - "{{ hostvars[h].indexer_node_name }}"
+{% endfor %}
+
+# Не давать кластеру собраться из одного узла при сетевом разрыве
+# (защита от split-brain: минимум двух узлов достаточно).
+gateway.recover_after_data_nodes: 2
+gateway.expected_data_nodes: {{ groups['wazuh_indexer'] | length }}
+gateway.recover_after_time: 5m
+
+# Пауза перед перебалансировкой шардов. Перезапуск узла на обновление
+# не должен тянуть за собой копирование сотен гигабайт по сети.
+cluster.routing.allocation.node_concurrent_recoveries: 2
+cluster.routing.allocation.disk.threshold_enabled: true
+cluster.routing.allocation.disk.watermark.low: "85%"
+cluster.routing.allocation.disk.watermark.high: "90%"
+cluster.routing.allocation.disk.watermark.flood_stage: "95%"
+
+bootstrap.memory_lock: true
+
+# Репозиторий снапшотов монтируется одинаково на всех узлах индексера.
+path.repo: ["{{ snapshot_mount_point }}"]
+
+# ---------------------------------------------------------------------
+# TLS. Transport — обязателен, HTTP — обязателен: алерты идут по сети
+# сегмента мониторинга и содержат имена учётных записей и путей.
+# ---------------------------------------------------------------------
+plugins.security.ssl.transport.pemcert_filepath: certs/indexer.pem
+plugins.security.ssl.transport.pemkey_filepath: certs/indexer-key.pem
+plugins.security.ssl.transport.pemtrustedcas_filepath: certs/root-ca.pem
+plugins.security.ssl.transport.enforce_hostname_verification: false
+plugins.security.ssl.transport.resolve_hostname: false
+
+plugins.security.ssl.http.enabled: true
+plugins.security.ssl.http.pemcert_filepath: certs/indexer.pem
+plugins.security.ssl.http.pemkey_filepath: certs/indexer-key.pem
+plugins.security.ssl.http.pemtrustedcas_filepath: certs/root-ca.pem
+
+# DN должны совпадать с subject сертификатов посимвольно.
+plugins.security.authcz.admin_dn:
+  - "CN=admin,OU={{ certs_ou }},O={{ certs_org }},C={{ certs_country }}"
+
+plugins.security.nodes_dn:
+{% for h in groups['wazuh_indexer'] %}
+  - "CN={{ h }},OU={{ certs_ou }},O={{ certs_org }},C={{ certs_country }}"
+{% endfor %}
+
+plugins.security.restapi.roles_enabled: ["all_access", "security_rest_api_access"]
+plugins.security.allow_default_init_securityindex: true
+plugins.security.allow_unsafe_democertificates: false
+
+# Аудит обращений к самому индексеру: кто и что смотрел в SIEM —
+# тоже событие безопасности.
+plugins.security.audit.type: internal_opensearch
+plugins.security.audit.config.disabled_rest_categories: ["AUTHENTICATED", "GRANTED_PRIVILEGES"]
+plugins.security.audit.config.disabled_transport_categories: ["AUTHENTICATED", "GRANTED_PRIVILEGES"]
+
+plugins.security.check_snapshot_restore_write_privileges: true
+plugins.security.enable_snapshot_restore_privilege: true
+
+compatibility.override_main_response_version: true

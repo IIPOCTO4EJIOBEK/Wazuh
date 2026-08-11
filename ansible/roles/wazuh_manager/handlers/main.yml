@@ -1,0 +1,15 @@
+---
+- name: restart wazuh-manager
+  ansible.builtin.service:
+    name: wazuh-manager
+    state: restarted
+
+- name: restart filebeat
+  ansible.builtin.service:
+    name: filebeat
+    state: restarted
+
+- name: rebuild cdb lists
+  ansible.builtin.command: /var/ossec/bin/wazuh-analysisd -t
+  changed_when: true
+  notify: restart wazuh-manager

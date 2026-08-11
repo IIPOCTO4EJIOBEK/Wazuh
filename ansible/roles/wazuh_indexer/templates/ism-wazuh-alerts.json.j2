@@ -1,0 +1,67 @@
+{
+  "policy": {
+    "description": "Жизненный цикл wazuh-alerts-* для AH Prostory. Сроки заданы в group_vars/all.yml (ism_*).",
+    "default_state": "hot",
+    "ism_template": [
+      {
+        "index_patterns": ["wazuh-alerts-*"],
+        "priority": 100
+      }
+    ],
+    "states": [
+      {
+        "name": "hot",
+        "actions": [
+          {
+            "rollover": {
+              "min_primary_shard_size": "40gb",
+              "min_index_age": "1d"
+            }
+          }
+        ],
+        "transitions": [
+          {
+            "state_name": "warm",
+            "conditions": { "min_index_age": "{{ ism_hot_days }}d" }
+          }
+        ]
+      },
+      {
+        "name": "warm",
+        "actions": [
+          { "read_only": {} },
+          { "force_merge": { "max_num_segments": 1 } }
+        ],
+        "transitions": [
+          {
+            "state_name": "cold",
+            "conditions": { "min_index_age": "{{ ism_warm_days }}d" }
+          }
+        ]
+      },
+      {
+        "name": "cold",
+        "actions": [
+          {
+            "snapshot": {
+              "repository": "{{ snapshot_repo_name }}",
+              "snapshot": "ism-cold"
+            }
+          },
+          { "replica_count": { "number_of_replicas": 0 } }
+        ],
+        "transitions": [
+          {
+            "state_name": "delete",
+            "conditions": { "min_index_age": "{{ ism_delete_days }}d" }
+          }
+        ]
+      },
+      {
+        "name": "delete",
+        "actions": [{ "delete": {} }],
+        "transitions": []
+      }
+    ]
+  }
+}

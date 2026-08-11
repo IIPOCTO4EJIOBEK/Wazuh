@@ -1,0 +1,47 @@
+# =====================================================================
+#  Подключение дашборда к Wazuh API. Управляется Ansible.
+#
+#  Адрес — VIP балансировщика, а не конкретный менеджер: при отказе
+#  master дашборд продолжает работать через worker, и оператору не
+#  приходится ничего переключать вручную.
+# =====================================================================
+
+hosts:
+  - {{ manager_cluster_name }}:
+      url: https://{{ wazuh_vip_agents }}
+      port: {{ manager_api_port }}
+      username: wazuh-wui
+      password: "{{ vault_wazuh_wui_password }}"
+      run_as: false
+
+# Проверки при открытии интерфейса. Отключены только те, что требуют
+# выхода в интернет.
+checks.pattern: true
+checks.template: true
+checks.api: true
+checks.setup: true
+checks.fields: true
+checks.metaFields: true
+checks.timeFilter: true
+checks.maxBuckets: true
+
+pattern: "wazuh-alerts-*"
+timeout: 20000
+
+# Состояние агентов пишется в отдельный индекс: по нему строится
+# отчёт о покрытии сети агентами.
+wazuh.monitoring.enabled: true
+wazuh.monitoring.frequency: 900
+wazuh.monitoring.shards: {{ indexer_alerts_shards }}
+wazuh.monitoring.replicas: {{ indexer_alerts_replicas }}
+wazuh.monitoring.creation: w
+wazuh.monitoring.pattern: wazuh-monitoring-*
+
+cron.statistics.status: true
+cron.statistics.interval: 0 */5 * * * *
+cron.statistics.shards: 1
+cron.statistics.replicas: 1
+
+# Поля, которые оператор видит в таблице событий по умолчанию.
+ip.selector: true
+ip.ignore: []

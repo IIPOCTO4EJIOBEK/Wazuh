@@ -1,0 +1,55 @@
+---
+# Импорт сохранённых объектов: шаблон индекса, визуализации и дашборды
+# AH Prostory. Объекты хранятся в индексе .kibana, поэтому импорт
+# выполняется один раз с любого узла дашборда.
+#
+# Сами объекты собираются скриптом dashboards/build_saved_objects.py —
+# править нужно его, а не готовый ndjson.
+
+- name: Ожидание готовности интерфейса
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ dashboard_port }}/api/status"
+    validate_certs: false
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    status_code: [200]
+  register: dash_status
+  retries: 20
+  delay: 15
+  until: dash_status.status == 200
+
+- name: Копирование набора сохранённых объектов
+  ansible.builtin.copy:
+    src: "{{ wazuh_content_dir }}/dashboards/ahp-soc-dashboards.ndjson"
+    dest: /tmp/ahp-soc-dashboards.ndjson
+    mode: "0600"
+
+- name: Импорт объектов
+  ansible.builtin.shell:
+    cmd: >-
+      curl -sk -X POST
+      "https://{{ ansible_host }}:{{ dashboard_port }}/api/saved_objects/_import?overwrite=true"
+      -u 'admin:{{ vault_indexer_admin_password }}'
+      -H 'osd-xsrf: true'
+      --form file=@/tmp/ahp-soc-dashboards.ndjson
+  register: import_result
+  changed_when: true
+  no_log: true
+
+- name: Разбор результата импорта
+  ansible.builtin.set_fact:
+    import_json: "{{ import_result.stdout | from_json }}"
+
+- name: Импорт прошёл без ошибок
+  ansible.builtin.assert:
+    that: import_json.success | bool
+    fail_msg: >-
+      Импорт объектов дашборда не удался:
+      {{ import_json.errors | default('подробностей нет') }}
+    success_msg: "Импортировано объектов: {{ import_json.successCount }}."
+
+- name: Удаление временного файла
+  ansible.builtin.file:
+    path: /tmp/ahp-soc-dashboards.ndjson
+    state: absent

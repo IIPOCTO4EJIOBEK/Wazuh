@@ -1,0 +1,85 @@
+---
+# Пароли встроенных пользователей Wazuh API.
+#
+# Пароли по умолчанию (wazuh:wazuh, wazuh-wui:wazuh-wui) знает кто угодно,
+# а под ними доступно управление active response на всех агентах. Меняем
+# при каждом прогоне — операция идемпотентна.
+#
+# Выполняется только на master: пользователи RBAC хранятся в общей базе
+# и расходятся по кластеру.
+
+- name: Смена паролей выполняется на master
+  ansible.builtin.meta: end_host
+  when: manager_node_type != 'master'
+
+- name: Получение токена под текущим паролем
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ manager_api_port }}/security/user/authenticate"
+    method: POST
+    user: wazuh
+    password: "{{ item }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [200, 401]
+  loop:
+    - "{{ vault_wazuh_api_password }}"
+    - "wazuh"
+  register: token_try
+  no_log: true
+
+- name: Действующий токен
+  ansible.builtin.set_fact:
+    wazuh_api_token: >-
+      {{ (token_try.results | selectattr('status', 'equalto', 200) | first).json.data.token }}
+  no_log: true
+  failed_when: false
+
+- name: Проверка, что вход удался
+  ansible.builtin.assert:
+    that: wazuh_api_token is defined and wazuh_api_token | length > 0
+    fail_msg: >-
+      Не удалось войти в Wazuh API ни текущим паролем из vault, ни паролем
+      по умолчанию. Проверить /var/ossec/logs/api.log.
+
+- name: Идентификаторы встроенных пользователей
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ manager_api_port }}/security/users"
+    headers:
+      Authorization: "Bearer {{ wazuh_api_token }}"
+    validate_certs: false
+  register: api_users
+
+- name: Смена паролей wazuh и wazuh-wui
+  ansible.builtin.uri:
+    url: >-
+      https://{{ ansible_host }}:{{ manager_api_port }}/security/users/{{
+        (api_users.json.data.affected_items
+         | selectattr('username', 'equalto', item.username) | first).id
+      }}
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ wazuh_api_token }}"
+      Content-Type: application/json
+    validate_certs: false
+    body_format: json
+    body:
+      password: "{{ item.password }}"
+    status_code: [200]
+  loop:
+    - { username: "wazuh", password: "{{ vault_wazuh_api_password }}" }
+    - { username: "wazuh-wui", password: "{{ vault_wazuh_wui_password }}" }
+  loop_control:
+    label: "{{ item.username }}"
+  no_log: true
+  register: pwd_change
+  changed_when: pwd_change.status == 200
+
+- name: Проверка входа новым паролем
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ manager_api_port }}/security/user/authenticate"
+    method: POST
+    user: wazuh
+    password: "{{ vault_wazuh_api_password }}"
+    force_basic_auth: true
+    validate_certs: false
+  no_log: true

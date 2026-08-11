@@ -1,0 +1,28 @@
+---
+# Внутренний УЦ и сертификаты узлов.
+#
+# Сертификаты выпускаются на управляющей машине в files/wazuh-certificates
+# и оттуда раскладываются по узлам. Каталог в .gitignore: закрытые ключи
+# в репозиторий не попадают.
+#
+# Перевыпуск (плановый или после компрометации):
+#     ansible-playbook playbooks/certificates.yml -e certs_force_regenerate=true
+# после чего перезапустить индексер, filebeat и дашборд — см. docs/10-operations.md.
+
+- name: Выпуск сертификатов внутреннего УЦ
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [certs, certificates]
+  roles:
+    - role: wazuh_certs
+
+- name: Раскладка сертификатов по узлам
+  hosts: wazuh_indexer:wazuh_manager:wazuh_dashboard
+  gather_facts: true
+  tags: [certs, certificates]
+  tasks:
+    - name: Роль распространения
+      ansible.builtin.include_role:
+        name: wazuh_certs
+        tasks_from: distribute

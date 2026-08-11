@@ -1,0 +1,311 @@
+<!--
+  =====================================================================
+   Windows и Active Directory.
+   Диапазон идентификаторов: 100300–100399.
+
+   Все правила строятся от базового 60000 (событие журнала Windows,
+   разобранное декодером windows_eventchannel) и проверяют конкретный
+   идентификатор события. Такой подход не зависит от того, как Wazuh
+   переименует встроенные правила в следующей версии.
+
+   Для работы правил на контроллере домена должна быть включена
+   расширенная политика аудита — состав политик и команды включения
+   приведены в docs/07-detection-response.md.
+
+   Правила 100310–100312 запускают изоляцию рабочей станции,
+   правила 100330–100331 — блокировку учётной записи в AD.
+   Оба действия описаны в ossec.conf в секции active-response.
+  =====================================================================
+-->
+
+<group name="ahp,ahp_windows,windows,">
+
+  <!-- ================================================================
+       Подбор паролей и подозрительные входы
+       ================================================================ -->
+
+  <rule id="100300" level="5">
+    <if_sid>60000</if_sid>
+    <field name="win.system.eventID" type="pcre2">^4625$</field>
+    <description>Windows: неудачный вход, учётная запись $(win.eventdata.targetUserName) на $(win.system.computer)</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failed,pci_dss_10.2.4,</group>
+  </rule>
+
+  <rule id="100301" level="12" frequency="10" timeframe="120">
+    <if_matched_sid>100300</if_matched_sid>
+    <same_field>win.eventdata.targetUserName</same_field>
+    <description>Windows: подбор пароля к учётной записи $(win.eventdata.targetUserName)</description>
+    <mitre>
+      <id>T1110.001</id>
+    </mitre>
+    <group>authentication_failures,</group>
+  </rule>
+
+  <!-- Один источник, много разных учётных записей — это password
+       spraying, а не забытый пароль. -->
+  <rule id="100302" level="13" frequency="15" timeframe="300">
+    <if_matched_sid>100300</if_matched_sid>
+    <same_source_ip />
+    <different_field>win.eventdata.targetUserName</different_field>
+    <description>Windows: распыление паролей с $(srcip) — 15 разных учётных записей за 5 минут</description>
+    <mitre>
+      <id>T1110.003</id>
+    </mitre>
+    <group>authentication_failures,</group>
+  </rule>
+
+  <rule id="100303" level="12">
+    <if_sid>60000</if_sid>
+    <field name="win.system.eventID" type="pcre2">^4740$</field>
+    <description>Active Directory: заблокирована учётная запись $(win.eventdata.targetUserName)</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>account_lockout,pci_dss_10.2.4,</group>
+  </rule>
+
+  <rule id="100304" level="13" frequency="5" timeframe="600">
+    <if_matched_sid>100303</if_matched_sid>
+    <description>Active Directory: пять и более блокировок учётных записей за 10 минут</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>account_lockout,</group>
+  </rule>
+
+  <!-- Вход под привилегированной учётной записью на рабочую станцию:
+       администратор домена не должен входить туда, откуда его хеш
+       может забрать вредонос. -->
+  <rule id="100305" level="12">
+    <if_sid>60000</if_sid>
+    <field name="win.system.eventID" type="pcre2">^4624$</field>
+    <field name="win.eventdata.logonType" type="pcre2">^(2|10)$</field>
+    <list field="win.eventdata.targetUserName" lookup="match_key">etc/lists/ahp-privileged-users</list>
+    <description>Интерактивный вход привилегированной учётной записи $(win.eventdata.targetUserName) на $(win.system.computer)</description>
+    <mitre>
+      <id>T1078.002</id>
+    </mitre>
+    <group>authentication_success,privileged_logon,</group>
+  </rule>
+
+  <!-- ================================================================
+       Вредоносная активность на рабочих станциях.
+       Эти три правила запускают автоматическую изоляцию узла.
+       ================================================================ -->
+
+  <rule id="100310" level="15">
+    <if_sid>60000</if_sid>
+    <field name="win.system.eventID" type="pcre2">^1116$|^1117$</field>
+    <description>Microsoft Defender обнаружил вредоносное ПО на $(win.system.computer)</description>
+    <mitre>
+      <id>T1204.002</id>
+    </mitre>
+    <group>malware,virus,</group>
+  </rule>
+
+  <!-- Массовое изменение файлов + удаление теневых копий — почерк
+       шифровальщика. Реакция должна быть немедленной и автоматической:
+       за время ручного разбора шифруется файловый сервер целиком. -->
+  <rule id="100311" level="15">
+    <if_sid>60000</if_sid>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)(vssadmin\s+delete\s+shadows|wbadmin\s+delete\s+catalog|bcdedit.+recoveryenabled\s+no|wmic\s+shadowcopy\s+delete)</field>
+    <description>Шифровальщик: удаление теневых копий на $(win.system.computer)</description>
+    <mitre>
+      <id>T1490</id>
+    </mitre>
+    <group>ransomware,</group>
+  </rule>
+
+  <rule id="100312" level="15" frequency="200" timeframe="60">
+    <if_matched_sid>554</if_matched_sid>
+    <same_agent />
+    <description>Шифровальщик: более 200 новых файлов за минуту на $(agent.name)</description>
+    <mitre>
+      <id>T1486</id>
+    </mitre>
+    <group>ransomware,</group>
+  </rule>
+
+  <!-- Запуск PowerShell с обходом политики и скрытым окном.
+       Уровень 13, без автоматической изоляции: у администраторов
+       встречаются легитимные сценарии, ложная изоляция сервера дороже. -->
+  <rule id="100313" level="13">
+    <if_sid>60000</if_sid>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)powershell.*(-enc\s|-encodedcommand|-w\s+hidden|-windowstyle\s+hidden|-nop\s.*-c\s|downloadstring|frombase64string)</field>
+    <description>Подозрительный запуск PowerShell на $(win.system.computer)</description>
+    <mitre>
+      <id>T1059.001</id>
+      <id>T1027</id>
+    </mitre>
+    <group>suspicious_process,</group>
+  </rule>
+
+  <rule id="100314" level="13">
+    <if_sid>60000</if_sid>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\(mimikatz|procdump|psexec|lazagne|rubeus|sharphound|adfind)\.exe$</field>
+    <description>Запущен инструмент атакующего: $(win.eventdata.image) на $(win.system.computer)</description>
+    <mitre>
+      <id>T1003.001</id>
+      <id>T1087.002</id>
+    </mitre>
+    <group>attack_tool,</group>
+  </rule>
+
+  <!-- Обращение к памяти LSASS — извлечение учётных данных. -->
+  <rule id="100315" level="15">
+    <if_sid>60000</if_sid>
+    <field name="win.system.eventID" type="pcre2">^4656$|^4663$</field>
+    <field name="win.eventdata.objectName" type="pcre2">(?i)lsass\.exe</field>
+    <description>Обращение к памяти LSASS на $(win.system.computer) — извлечение учётных данных</description>
+    <mitre>
+      <id>T1003.001</id>
+    </mitre>
+    <group>credential_access,</group>
+  </rule>
+
+  <!-- ================================================================
+       Изменения в Active Directory.
+       Правила 100330 и 100331 запускают блокировку учётной записи.
+       ================================================================ -->
+
+  <rule id="100320" level="12">
+    <if_sid>60000</if_sid>
+    <field name="win.system.eventID" type="pcre2">^4728$|^4732$|^4756$</field>
+    <field name="win.eventdata.targetUserName" type="pcre2">(?i)(domain admins|enterprise admins|schema admins|администраторы домена|администраторы предприятия)</field>
+    <description>Active Directory: учётная запись добавлена в привилегированную группу $(win.eventdata.targetUserName)</description>
+    <mitre>
+      <id>T1098</id>
+      <id>T1078.002</id>
+    </mitre>
+    <group>account_changed,privilege_escalation,pci_dss_10.2.5,</group>
+  </rule>
+
+  <rule id="100321" level="12">
+    <if_sid>60000</if_sid>
+    <field name="win.system.eventID" type="pcre2">^4720$</field>
+    <description>Active Directory: создана учётная запись $(win.eventdata.targetUserName)</description>
+    <mitre>
+      <id>T1136.002</id>
+    </mitre>
+    <group>account_changed,pci_dss_10.2.5,</group>
+  </rule>
+
+  <rule id="100322" level="12">
+    <if_sid>60000</if_sid>
+    <field name="win.system.eventID" type="pcre2">^4725$|^4726$</field>
+    <description>Active Directory: учётная запись $(win.eventdata.targetUserName) отключена или удалена</description>
+    <mitre>
+      <id>T1531</id>
+    </mitre>
+    <group>account_changed,</group>
+  </rule>
+
+  <rule id="100323" level="13">
+    <if_sid>60000</if_sid>
+    <field name="win.system.eventID" type="pcre2">^4738$</field>
+    <field name="win.eventdata.userAccountControl" type="pcre2">(?i)(passwd_notreqd|dont_expire_passwd|trusted_for_delegation)</field>
+    <description>Active Directory: у учётной записи $(win.eventdata.targetUserName) ослаблены требования к паролю или включено делегирование</description>
+    <mitre>
+      <id>T1098</id>
+    </mitre>
+    <group>account_changed,</group>
+  </rule>
+
+  <!-- Kerberoasting: массовый запрос сервисных билетов со слабым
+       шифрованием RC4. -->
+  <rule id="100324" level="10">
+    <if_sid>60000</if_sid>
+    <field name="win.system.eventID" type="pcre2">^4769$</field>
+    <field name="win.eventdata.ticketEncryptionType" type="pcre2">^0x17$</field>
+    <description>Kerberos: запрошен сервисный билет со слабым шифрованием RC4</description>
+    <mitre>
+      <id>T1558.003</id>
+    </mitre>
+    <group>credential_access,</group>
+  </rule>
+
+  <rule id="100325" level="13" frequency="12" timeframe="300">
+    <if_matched_sid>100324</if_matched_sid>
+    <same_source_ip />
+    <description>Kerberoasting: массовый запрос сервисных билетов RC4 с $(srcip)</description>
+    <mitre>
+      <id>T1558.003</id>
+    </mitre>
+    <group>credential_access,</group>
+  </rule>
+
+  <!-- Очистка журнала безопасности — почти всегда сокрытие следов. -->
+  <rule id="100326" level="14">
+    <if_sid>60000</if_sid>
+    <field name="win.system.eventID" type="pcre2">^1102$|^104$</field>
+    <description>Windows: очищен журнал событий на $(win.system.computer)</description>
+    <mitre>
+      <id>T1070.001</id>
+    </mitre>
+    <group>logs_cleared,pci_dss_10.5.2,</group>
+  </rule>
+
+  <!-- ================================================================
+       Правила, запускающие блокировку учётной записи в AD.
+       Порог намеренно высокий: автоматическая блокировка сотрудника —
+       заметное действие, и ошибка здесь стоит рабочего дня человека.
+       ================================================================ -->
+
+  <rule id="100330" level="15">
+    <if_sid>100315</if_sid>
+    <list field="win.eventdata.subjectUserName" lookup="not_match_key">etc/lists/ahp-privileged-users</list>
+    <description>Компрометация учётной записи $(win.eventdata.subjectUserName): извлечение учётных данных непривилегированным пользователем</description>
+    <mitre>
+      <id>T1003.001</id>
+    </mitre>
+    <group>credential_access,ahp_ar_disable_user,</group>
+  </rule>
+
+  <rule id="100331" level="15" frequency="3" timeframe="600">
+    <if_matched_sid>100320</if_matched_sid>
+    <description>Массовое изменение состава привилегированных групп AD — три и более за 10 минут</description>
+    <mitre>
+      <id>T1098</id>
+    </mitre>
+    <group>privilege_escalation,ahp_ar_disable_user,</group>
+  </rule>
+
+  <!-- ================================================================
+       Агент увольнений (dismissal-agent)
+       ================================================================ -->
+
+  <rule id="100340" level="0">
+    <decoded_as>dismissal-agent</decoded_as>
+    <description>Агент увольнений: событие</description>
+  </rule>
+
+  <rule id="100341" level="6">
+    <if_sid>100340</if_sid>
+    <field name="dismissal.result">^ok$</field>
+    <description>Агент увольнений: учётная запись $(dstuser) обработана по заявке $(dismissal.request_id)</description>
+    <group>account_changed,</group>
+  </rule>
+
+  <rule id="100342" level="10">
+    <if_sid>100340</if_sid>
+    <field name="dismissal.result" type="pcre2">^(error|escalated)$</field>
+    <description>Агент увольнений: заявка $(dismissal.request_id) не отработана, результат $(dismissal.result)</description>
+    <group>account_changed,service_availability,</group>
+  </rule>
+
+  <!-- Агент отключает учётные записи по расписанию и не должен
+       превышать собственный порог. Превышение — либо ошибка в разборе
+       заявок, либо чужие руки. -->
+  <rule id="100343" level="13" frequency="6" timeframe="3600">
+    <if_matched_sid>100341</if_matched_sid>
+    <description>Агент увольнений отключил шесть и более учётных записей за час</description>
+    <mitre>
+      <id>T1531</id>
+    </mitre>
+    <group>account_changed,</group>
+  </rule>
+
+</group>

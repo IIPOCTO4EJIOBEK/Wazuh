@@ -1,0 +1,345 @@
+<!--
+  =====================================================================
+   {{ manager_node_name }} ({{ manager_node_type }}) — конфигурация менеджера Wazuh
+   Файл управляется Ansible (roles/wazuh_manager). Правки на узле
+   перетираются при следующем прогоне.
+  =====================================================================
+-->
+<ossec_config>
+
+  <global>
+    <jsonout_output>yes</jsonout_output>
+    <alerts_log>yes</alerts_log>
+    <logall>{{ 'yes' if manager_alerts_log_all else 'no' }}</logall>
+    <logall_json>{{ 'yes' if manager_logall_json else 'no' }}</logall_json>
+
+    <email_notification>{{ 'yes' if smtp_enabled else 'no' }}</email_notification>
+{% if smtp_enabled %}
+    <smtp_server>{{ smtp_server }}</smtp_server>
+    <email_from>{{ smtp_from }}</email_from>
+{% for addr in smtp_to %}
+    <email_to>{{ addr }}</email_to>
+{% endfor %}
+    <email_maxperhour>24</email_maxperhour>
+    <!-- Письмо на каждое событие превращает почту в шум: группируем. -->
+    <email_idsname>Wazuh {{ wazuh_domain }}</email_idsname>
+{% endif %}
+
+    <agents_disconnection_time>10m</agents_disconnection_time>
+    <agents_disconnection_alert_time>30m</agents_disconnection_alert_time>
+
+  </global>
+
+  <alerts>
+    <log_alert_level>3</log_alert_level>
+    <email_alert_level>{{ alert_level_email }}</email_alert_level>
+  </alerts>
+
+  <!-- ================================================================
+       Кластер менеджеров.
+       master принимает регистрацию агентов и держит эталон правил;
+       worker получает от него правила, группы и client.keys.
+       ================================================================ -->
+  <cluster>
+    <name>{{ manager_cluster_name }}</name>
+    <node_name>{{ manager_node_name }}</node_name>
+    <node_type>{{ manager_node_type }}</node_type>
+    <key>{{ vault_manager_cluster_key }}</key>
+    <port>{{ manager_cluster_port }}</port>
+    <bind_addr>0.0.0.0</bind_addr>
+    <nodes>
+{% for h in groups['wazuh_manager_master'] %}
+      <node>{{ hostvars[h].ansible_host }}</node>
+{% endfor %}
+    </nodes>
+    <hidden>no</hidden>
+    <disabled>no</disabled>
+  </cluster>
+
+  <!-- ================================================================
+       Приём событий агентов.
+       Только TCP: под нагрузкой UDP теряет события молча, а потерянное
+       событие безопасности хуже задержанного.
+       ================================================================ -->
+  <remote>
+    <connection>secure</connection>
+    <port>{{ manager_agent_port }}</port>
+    <protocol>{{ manager_protocol }}</protocol>
+    <queue_size>131072</queue_size>
+    <local_ip>{{ ansible_host }}</local_ip>
+  </remote>
+
+{% if manager_node_type == 'master' %}
+  <!-- ================================================================
+       Регистрация агентов (authd) — только на master.
+       Пароль обязателен: без него любой узел сети зарегистрируется сам.
+       force.enabled разрешает переиспользовать имя после переустановки
+       агента, иначе переустановленная машина не сможет подключиться.
+       ================================================================ -->
+  <auth>
+    <disabled>no</disabled>
+    <port>{{ manager_enrollment_port }}</port>
+    <use_source_ip>no</use_source_ip>
+    <purge>yes</purge>
+    <use_password>yes</use_password>
+    <ssl_verify_host>no</ssl_verify_host>
+    <ssl_auto_negotiate>no</ssl_auto_negotiate>
+    <force>
+      <enabled>yes</enabled>
+      <key_mismatch>yes</key_mismatch>
+      <disconnected_time enabled="yes">1h</disconnected_time>
+      <after_registration_time>1h</after_registration_time>
+    </force>
+  </auth>
+{% endif %}
+
+  <!-- ================================================================
+       Связь с индексером: нужна модулю выявления уязвимостей, который
+       хранит состояние в wazuh-states-vulnerabilities-*.
+       ================================================================ -->
+  <indexer>
+    <enabled>yes</enabled>
+    <hosts>
+{% for h in groups['wazuh_indexer'] %}
+      <host>https://{{ hostvars[h].ansible_host }}:{{ indexer_http_port }}</host>
+{% endfor %}
+    </hosts>
+    <username>admin</username>
+    <password>{{ vault_indexer_admin_password }}</password>
+    <ssl>
+      <certificate_authorities>
+        <ca>/etc/filebeat/certs/root-ca.pem</ca>
+      </certificate_authorities>
+      <certificate>/etc/filebeat/certs/manager.pem</certificate>
+      <key>/etc/filebeat/certs/manager-key.pem</key>
+    </ssl>
+  </indexer>
+
+  <!-- ================================================================
+       Выявление уязвимостей: сопоставление инвентаря агентов с базами
+       CVE. Обновление фидов раз в час.
+       ================================================================ -->
+  <vulnerability-detection>
+    <enabled>yes</enabled>
+    <index-status>yes</index-status>
+    <feed-update-interval>60m</feed-update-interval>
+  </vulnerability-detection>
+
+  <!-- Контроль целостности файлов на самом менеджере: правила и ключи
+       агентов — первоочередная цель при попытке скрыть следы. -->
+  <syscheck>
+    <disabled>no</disabled>
+    <frequency>21600</frequency>
+    <scan_on_start>yes</scan_on_start>
+    <alert_new_files>yes</alert_new_files>
+
+    <directories check_all="yes" realtime="yes" report_changes="yes">/var/ossec/etc</directories>
+    <directories check_all="yes" realtime="yes">/var/ossec/etc/rules,/var/ossec/etc/decoders</directories>
+    <directories check_all="yes" realtime="yes">/var/ossec/active-response/bin</directories>
+    <directories check_all="yes" realtime="yes">/var/ossec/integrations</directories>
+    <directories check_all="yes">/etc,/usr/bin,/usr/sbin,/bin,/sbin</directories>
+
+    <ignore>/etc/mtab</ignore>
+    <ignore>/etc/hosts.deny</ignore>
+    <ignore>/etc/random-seed</ignore>
+    <ignore>/etc/adjtime</ignore>
+    <ignore type="sregex">^/var/ossec/etc/.*\.bak$</ignore>
+
+    <skip_nfs>yes</skip_nfs>
+    <skip_dev>yes</skip_dev>
+    <skip_proc>yes</skip_proc>
+    <skip_sys>yes</skip_sys>
+  </syscheck>
+
+  <rootcheck>
+    <disabled>no</disabled>
+    <check_files>yes</check_files>
+    <check_trojans>yes</check_trojans>
+    <check_dev>yes</check_dev>
+    <check_sys>yes</check_sys>
+    <check_pids>yes</check_pids>
+    <check_ports>yes</check_ports>
+    <check_if>yes</check_if>
+    <frequency>43200</frequency>
+    <rootkit_files>etc/rootcheck/rootkit_files.txt</rootkit_files>
+    <rootkit_trojans>etc/rootcheck/rootkit_trojans.txt</rootkit_trojans>
+    <skip_nfs>yes</skip_nfs>
+  </rootcheck>
+
+  <sca>
+    <enabled>yes</enabled>
+    <scan_on_start>yes</scan_on_start>
+    <interval>12h</interval>
+    <skip_nfs>yes</skip_nfs>
+  </sca>
+
+  <wodle name="syscollector">
+    <disabled>no</disabled>
+    <interval>1h</interval>
+    <scan_on_start>yes</scan_on_start>
+    <hardware>yes</hardware>
+    <os>yes</os>
+    <network>yes</network>
+    <packages>yes</packages>
+    <ports all="no">yes</ports>
+    <processes>yes</processes>
+    <hotfixes>yes</hotfixes>
+  </wodle>
+
+  <!-- Отчёты по соответствию требованиям -->
+  <wodle name="cis-cat">
+    <disabled>yes</disabled>
+  </wodle>
+
+  <!-- ================================================================
+       Active response — автоматическое реагирование.
+
+       Общие принципы, заложенные в конфигурацию:
+         * блокировка всегда с таймаутом, «навсегда» не блокируем;
+         * repeated_offenders удлиняет срок при повторах;
+         * адреса из ar-never-block.txt не блокируются никогда;
+         * действия, меняющие состояние AD, требуют уровня 12 и выше.
+       ================================================================ -->
+  <command>
+    <name>firewall-drop</name>
+    <executable>firewall-drop</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>ahp-block-ip</name>
+    <executable>ahp-block-ip</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>ahp-isolate-host</name>
+    <executable>ahp-isolate-host.cmd</executable>
+    <timeout_allowed>yes</timeout_allowed>
+  </command>
+
+  <command>
+    <name>ahp-disable-ad-user</name>
+    <executable>ahp-disable-ad-user.cmd</executable>
+    <timeout_allowed>no</timeout_allowed>
+  </command>
+
+  <!-- Брутфорс SSH и веб-аутентификации: блокировка источника на 30 минут
+       на самом атакуемом узле. -->
+  <active-response>
+    <command>ahp-block-ip</command>
+    <location>local</location>
+    <rules_group>authentication_failures,web_scan,recon</rules_group>
+    <timeout>1800</timeout>
+  </active-response>
+
+  <!-- Повтор атаки после разблокировки — срок растёт. -->
+  <active-response>
+    <command>ahp-block-ip</command>
+    <location>local</location>
+    <level>10</level>
+    <rules_group>attack,exploit_attempt</rules_group>
+    <timeout>3600</timeout>
+    <repeated_offenders>30,60,120,480</repeated_offenders>
+  </active-response>
+
+  <!-- Изоляция рабочей станции Windows при срабатывании правил на
+       шифровальщика и на подозрительное поведение процессов. -->
+  <active-response>
+    <command>ahp-isolate-host</command>
+    <location>local</location>
+    <rules_id>100310,100311,100312</rules_id>
+    <timeout>3600</timeout>
+  </active-response>
+
+  <!-- Блокировка учётной записи AD выполняется на контроллере домена
+       (агент в группе dc), а не на скомпрометированной машине. -->
+  <active-response>
+    <command>ahp-disable-ad-user</command>
+    <location>defined-agent</location>
+    <agent_id>{{ ar_domain_controller_agent_id | default('001') }}</agent_id>
+    <rules_id>100330,100331</rules_id>
+  </active-response>
+
+  <!-- ================================================================
+       Интеграции. Конфигурация скриптов — в roles/wazuh_integrations.
+       ================================================================ -->
+{% if servicedesk_enabled %}
+  <integration>
+    <name>custom-servicedesk</name>
+    <hook_url>{{ servicedesk_url }}</hook_url>
+    <level>{{ alert_level_servicedesk }}</level>
+    <alert_format>json</alert_format>
+  </integration>
+{% endif %}
+
+{% if telegram_enabled %}
+  <integration>
+    <name>custom-telegram</name>
+    <hook_url>https://api.telegram.org/bot{{ vault_telegram_bot_token }}/sendMessage</hook_url>
+    <level>{{ alert_level_telegram }}</level>
+    <alert_format>json</alert_format>
+  </integration>
+{% endif %}
+
+{% if zabbix_enabled %}
+  <integration>
+    <name>custom-zabbix</name>
+    <hook_url>{{ zabbix_server }}</hook_url>
+    <level>10</level>
+    <alert_format>json</alert_format>
+  </integration>
+{% endif %}
+
+  <!-- ================================================================
+       Собственные журналы менеджера
+       ================================================================ -->
+  <localfile>
+    <log_format>syslog</log_format>
+    <location>/var/log/auth.log</location>
+  </localfile>
+
+  <localfile>
+    <log_format>syslog</log_format>
+    <location>/var/log/syslog</location>
+  </localfile>
+
+  <localfile>
+    <log_format>command</log_format>
+    <command>df -P</command>
+    <frequency>360</frequency>
+  </localfile>
+
+  <localfile>
+    <log_format>full_command</log_format>
+    <command>netstat -tulpn | sed 's/\([[:alnum:]]\+\)\ \+[[:digit:]]\+\ \+[[:digit:]]\+\ \+\(.*\):\([[:digit:]]*\)\ \+\([0-9\.\:\*]\+\).\+\ \([[:digit:]]*\/[[:alnum:]\-]*\).*/\1 \2 == \3 == \4 \5/' | sort -k4 -g | sed 's/ == \(.*\) ==/:\1/' | sed 1,2d</command>
+    <alias>netstat listening ports</alias>
+    <frequency>360</frequency>
+  </localfile>
+
+  <ruleset>
+    <decoder_dir>ruleset/decoders</decoder_dir>
+    <rule_dir>ruleset/rules</rule_dir>
+    <rule_exclude>0215-policy_rules.xml</rule_exclude>
+    <list>etc/lists/audit-keys</list>
+    <list>etc/lists/amazon/aws-eventnames</list>
+    <list>etc/lists/security-eventchannel</list>
+    <list>etc/lists/ahp-privileged-users</list>
+    <list>etc/lists/ahp-critical-hosts</list>
+
+    <decoder_dir>etc/decoders</decoder_dir>
+    <rule_dir>etc/rules</rule_dir>
+  </ruleset>
+
+  <rule_test>
+    <enabled>yes</enabled>
+    <threads>1</threads>
+    <max_sessions>64</max_sessions>
+    <session_timeout>15m</session_timeout>
+  </rule_test>
+
+  <logging>
+    <log_format>plain</log_format>
+  </logging>
+
+</ossec_config>

@@ -1,0 +1,273 @@
+# =====================================================================
+#  Шаблон Zabbix для контроля платформы Wazuh.
+#  Импорт: Настройка → Шаблоны → Импорт, файл в формате YAML.
+#  После импорта создать узел с именем wazuh-cluster и привязать
+#  к нему этот шаблон. Метрики приходят по trapper с менеджеров.
+# =====================================================================
+zabbix_export:
+  version: '6.0'
+  date: '2026-08-09T00:00:00Z'
+  groups:
+  - uuid: 8f3bda5ab32b49f88697bde14ead5b81
+    name: Templates/Applications
+  templates:
+  - uuid: bb7aa984c81834ab377ec1a92387b08a
+    template: Wazuh SIEM AH Prostory
+    name: Wazuh SIEM AH Prostory
+    description: 'Контроль состояния платформы Wazuh со стороны Zabbix.
+
+
+      Смысл шаблона: отказ SIEM не может быть замечен самой SIEM. Метрики присылает скрипт /usr/local/sbin/wazuh-zabbix-report.sh
+      с менеджеров раз в пять минут, элементы данных — типа Zabbix trapper.
+
+
+      Узел в Zabbix должен называться так же, как ZABBIX_HOST в /var/ossec/etc/integrations.env (по умолчанию
+      wazuh-cluster).'
+    groups:
+    - name: Templates/Applications
+    items:
+    - uuid: 9448416f3d7af70c1c00d24fc397895c
+      name: 'Wazuh: агенты активны'
+      type: TRAP
+      key: wazuh.agents.active
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: Число агентов, вышедших на связь.
+      timeout: 3s
+    - uuid: 2623ff4a55d2a89b8d9bb3945c724f64
+      name: 'Wazuh: агенты отключены'
+      type: TRAP
+      key: wazuh.agents.disconnected
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: Агенты, переставшие слать события.
+      timeout: 3s
+    - uuid: 4a8d0b135a2c7aa0a39b419a62d5d0ff
+      name: 'Wazuh: агенты не подключались'
+      type: TRAP
+      key: wazuh.agents.never_connected
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: Зарегистрированы, но ни разу не выходили на связь.
+      timeout: 3s
+    - uuid: 31aeda5a4d962f924a724dda2e85a9c4
+      name: 'Wazuh: агентов всего'
+      type: TRAP
+      key: wazuh.agents.total
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: Всего зарегистрировано агентов.
+      timeout: 3s
+    - uuid: f52b3f7686c7e00bc20c96c1a4211210
+      name: 'Wazuh: узлов в кластере менеджеров'
+      type: TRAP
+      key: wazuh.cluster.nodes
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: 'Ожидается 2: master и worker.'
+      timeout: 3s
+    - uuid: 35b20e073f89027a5ae2a9715bfd6cd7
+      name: 'Wazuh: API доступен'
+      type: TRAP
+      key: wazuh.api.available
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: 1 — API отвечает, 0 — нет.
+      timeout: 3s
+    - uuid: bcf5c2fad9dba37f78f177fa259299aa
+      name: 'Wazuh: состояние индексера'
+      type: TRAP
+      key: wazuh.indexer.status
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: 0 green, 1 yellow, 2 red, 3 недоступен.
+      timeout: 3s
+    - uuid: abee82dc0f7ee40a5dd03caa74a04e11
+      name: 'Wazuh: узлов индексера'
+      type: TRAP
+      key: wazuh.indexer.number_of_nodes
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: Ожидается 3.
+      timeout: 3s
+    - uuid: 3cc8edda4c29c0073d09c250c947ad40
+      name: 'Wazuh: активных шардов'
+      type: TRAP
+      key: wazuh.indexer.active_shards
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: Число активных шардов.
+      timeout: 3s
+    - uuid: 509d42ab3c579e4305bba742737ed9fb
+      name: 'Wazuh: нераспределённых шардов'
+      type: TRAP
+      key: wazuh.indexer.unassigned_shards
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: Больше нуля дольше 15 минут — потеря избыточности.
+      timeout: 3s
+    - uuid: 79e3e052740bd40843a15d17ed9cb2de
+      name: 'Wazuh: обработано событий'
+      type: TRAP
+      key: wazuh.analysisd.events_processed
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: Счётчик обработанных событий.
+      timeout: 3s
+    - uuid: 1a35bc40d23d0b97c31e3c1facb20db9
+      name: 'Wazuh: отброшено событий'
+      type: TRAP
+      key: wazuh.analysisd.events_dropped
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: ''
+      description: Больше нуля — события теряются.
+      timeout: 3s
+    - uuid: 2513dcf721929a5f2a5033474d73d64b
+      name: 'Wazuh: заполнение очереди событий'
+      type: TRAP
+      key: wazuh.analysisd.event_queue_usage
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: FLOAT
+      units: ''
+      description: Доля заполнения очереди analysisd.
+      timeout: 3s
+    - uuid: b8507580996b107b7860d6f0b3032220
+      name: 'Wazuh: заполнение очереди правил'
+      type: TRAP
+      key: wazuh.analysisd.rule_matching_queue_usage
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: FLOAT
+      units: ''
+      description: Доля заполнения очереди сопоставления правил.
+      timeout: 3s
+    - uuid: 0b392abd934c92a82f2a2f88be65c7b3
+      name: 'Wazuh: возраст последнего снапшота'
+      type: TRAP
+      key: wazuh.snapshot.age_hours
+      delay: '0'
+      history: 90d
+      trends: 365d
+      value_type: UNSIGNED
+      units: h
+      description: Часов с момента последнего успешного снапшота.
+      timeout: 3s
+    - uuid: 292d30245cb5fc0b96dc7929964f11ed
+      name: 'Wazuh: последний инцидент'
+      type: TRAP
+      key: wazuh.alert
+      delay: '0'
+      history: 90d
+      trends: '0'
+      value_type: TEXT
+      units: ''
+      description: Текст последнего алерта уровня 10 и выше.
+      timeout: 3s
+    triggers:
+    - uuid: 1e46481afebb17e8ab5529da7d8a82bc
+      expression: last(/Wazuh SIEM AH Prostory/wazuh.api.available)=0
+      name: 'Wazuh: API недоступен'
+      priority: HIGH
+      description: Wazuh API не отвечает. Дашборд и управление агентами недоступны.
+      manual_close: 'YES'
+    - uuid: 32e821f5a8c7c9f472d1b9aefb7c0bbb
+      expression: last(/Wazuh SIEM AH Prostory/wazuh.indexer.status)=2
+      name: 'Wazuh: индексер в состоянии red'
+      priority: DISASTER
+      description: 'Часть данных недоступна: как минимум один первичный шард не размещён.'
+      manual_close: 'YES'
+    - uuid: 8d6157ff777a2b7964ad398f89cb6a7c
+      expression: min(/Wazuh SIEM AH Prostory/wazuh.indexer.status,30m)=1
+      name: 'Wazuh: индексер в состоянии yellow дольше 30 минут'
+      priority: AVERAGE
+      description: Реплики не размещены — потеряна избыточность. Проверить узлы индексера.
+      manual_close: 'YES'
+    - uuid: b1a78c02e9092e0f061b6f165fcc389b
+      expression: last(/Wazuh SIEM AH Prostory/wazuh.indexer.status)=3
+      name: 'Wazuh: индексер недоступен'
+      priority: DISASTER
+      description: Кластер индексера не отвечает. Алерты не сохраняются.
+      manual_close: 'YES'
+    - uuid: 63647ff0a9447125db07f0ec5e5e6ebb
+      expression: last(/Wazuh SIEM AH Prostory/wazuh.indexer.number_of_nodes)<3
+      name: 'Wazuh: потерян узел индексера'
+      priority: HIGH
+      description: В кластере меньше трёх узлов. Потеря ещё одного означает потерю кворума.
+      manual_close: 'YES'
+    - uuid: ff4bafd1c8433648edacf5d5cb3321bb
+      expression: last(/Wazuh SIEM AH Prostory/wazuh.cluster.nodes)<2
+      name: 'Wazuh: потерян узел кластера менеджеров'
+      priority: HIGH
+      description: Работает только один менеджер. Резервирования приёма событий нет.
+      manual_close: 'YES'
+    - uuid: 69c3d8e87da895a04af981b729c3d0f0
+      expression: change(/Wazuh SIEM AH Prostory/wazuh.analysisd.events_dropped)>0
+      name: 'Wazuh: события отбрасываются'
+      priority: HIGH
+      description: Очередь переполнена, часть событий не анализируется. Это выглядит как затишье на графиках.
+      manual_close: 'YES'
+    - uuid: c8869615fcda4a2404e26a618009911f
+      expression: min(/Wazuh SIEM AH Prostory/wazuh.analysisd.event_queue_usage,10m)>0.8
+      name: 'Wazuh: очередь событий заполнена более чем на 80 процентов'
+      priority: AVERAGE
+      description: Менеджер не успевает разбирать поток. Увеличить очереди в local_internal_options.conf
+        или добавить worker.
+      manual_close: 'YES'
+    - uuid: a6ec22afe704781ab9954cc5025c3121
+      expression: last(/Wazuh SIEM AH Prostory/wazuh.agents.disconnected)>last(/Wazuh SIEM AH Prostory/wazuh.agents.total)*0.05
+      name: 'Wazuh: более 5 процентов агентов отключено'
+      priority: AVERAGE
+      description: Значительная часть сети перестала слать события.
+      manual_close: 'YES'
+    - uuid: d3d918f5b6bb464d1d69f44bf4b34aed
+      expression: last(/Wazuh SIEM AH Prostory/wazuh.snapshot.age_hours)>36
+      name: 'Wazuh: нет свежего снапшота более 36 часов'
+      priority: HIGH
+      description: Резервная копия индексов устарела. Проверить монтирование хранилища снапшотов.
+      manual_close: 'YES'
+    - uuid: 06438f863f3ff0b4f1f21225e31eb7cd
+      expression: change(/Wazuh SIEM AH Prostory/wazuh.analysisd.events_processed)=0 and last(/Wazuh SIEM
+        AH Prostory/wazuh.api.available)=1
+      name: 'Wazuh: поток событий прекратился'
+      priority: HIGH
+      description: Менеджер жив, но событий не поступает — проверить приём на 1514 и агенты.
+      manual_close: 'YES'

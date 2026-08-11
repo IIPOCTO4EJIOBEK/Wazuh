@@ -1,0 +1,21 @@
+---
+- name: Кластер индексера
+  hosts: wazuh_indexer
+  gather_facts: true
+  become: true
+  serial: 1          # узлы поднимаются по одному: кворум не должен теряться
+  tags: [indexer]
+  roles:
+    - role: common
+    - role: wazuh_indexer
+
+- name: Инициализация кластера индексера
+  hosts: wazuh_indexer[0]
+  gather_facts: false
+  become: true
+  tags: [indexer, indexer-init]
+  tasks:
+    - name: Загрузка конфигурации безопасности и политик ISM
+      ansible.builtin.include_role:
+        name: wazuh_indexer
+        tasks_from: bootstrap

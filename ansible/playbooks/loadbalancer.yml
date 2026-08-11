@@ -1,0 +1,9 @@
+---
+- name: Балансировщики HAProxy + keepalived
+  hosts: wazuh_lb
+  gather_facts: true
+  become: true
+  tags: [lb, loadbalancer]
+  roles:
+    - role: common
+    - role: wazuh_lb

@@ -1,0 +1,58 @@
+---
+# =====================================================================
+#  Внутренние учётные записи индексера. Управляется Ansible.
+#
+#  Хеши считаются фильтром password_hash('bcrypt') — на управляющей
+#  машине должны стоять passlib и bcrypt:
+#      pip3 install passlib bcrypt
+#
+#  Ручной аналог, если понадобится проверить хеш:
+#      /usr/share/wazuh-indexer/plugins/opensearch-security/tools/hash.sh -p '<пароль>'
+#
+#  Файл вступает в силу только после загрузки конфигурации:
+#      tasks/bootstrap.yml → securityadmin.sh
+# =====================================================================
+
+_meta:
+  type: "internalusers"
+  config_version: 2
+
+# Полный доступ. Используется только securityadmin.sh и разбором
+# инцидентов; в дашборде под ним не работают.
+admin:
+  hash: "{{ vault_indexer_admin_password | password_hash('bcrypt', rounds=12) }}"
+  reserved: true
+  backend_roles:
+    - "admin"
+  description: "Администратор индексера"
+
+# Служебная учётная запись дашборда.
+kibanaserver:
+  hash: "{{ vault_indexer_kibanaserver_password | password_hash('bcrypt', rounds=12) }}"
+  reserved: true
+  description: "Служебная учётная запись Wazuh dashboard"
+
+# Учётная запись, под которой filebeat менеджеров пишет алерты.
+# Прав на чтение чужих индексов и на управление кластером у неё нет.
+filebeat:
+  hash: "{{ vault_indexer_filebeat_password | password_hash('bcrypt', rounds=12) }}"
+  reserved: false
+  backend_roles:
+    - "wazuh_writer"
+  description: "Запись алертов с менеджеров"
+
+# Учётная запись задания снапшотов.
+snapshotter:
+  hash: "{{ vault_indexer_snapshot_password | password_hash('bcrypt', rounds=12) }}"
+  reserved: false
+  backend_roles:
+    - "wazuh_snapshot"
+  description: "Резервное копирование индексов"
+
+# Только чтение — для аудиторов и смежных подразделений.
+auditor:
+  hash: "{{ vault_indexer_readonly_password | password_hash('bcrypt', rounds=12) }}"
+  reserved: false
+  backend_roles:
+    - "wazuh_reader"
+  description: "Просмотр без права изменения"

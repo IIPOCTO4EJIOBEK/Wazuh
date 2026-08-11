@@ -1,0 +1,90 @@
+#!/bin/bash
+# =====================================================================
+#  Отправка состояния платформы Wazuh в Zabbix ({{ zabbix_server }}).
+#  Управляется Ansible.
+#
+#  Zabbix в компании уже есть и уже настроен на оповещение дежурных.
+#  Поэтому отказ самой SIEM должен приходить через него, а не через
+#  саму SIEM: система, которая сообщает о собственной недоступности,
+#  сообщить о ней не сможет.
+#
+#  Элементы данных на стороне Zabbix — типа «Zabbix trapper»,
+#  шаблон в integrations/zabbix/wazuh_template.yaml
+# =====================================================================
+
+set -o pipefail
+
+ZBX_SERVER="{{ zabbix_server }}"
+ZBX_HOST="{{ zabbix_sender_host }}"
+SENDER=$(command -v zabbix_sender) || exit 0
+
+API="https://127.0.0.1:{{ manager_api_port }}"
+IDX="https://{{ hostvars[groups['wazuh_indexer'][0]].ansible_host }}:{{ indexer_http_port }}"
+
+send() {
+    "$SENDER" -z "$ZBX_SERVER" -s "$ZBX_HOST" -k "$1" -o "$2" >/dev/null 2>&1
+}
+
+# --- Wazuh API: агенты и кластер -------------------------------------
+TOKEN=$(curl -sk -u "wazuh:{{ vault_wazuh_api_password }}" -X POST \
+        "$API/security/user/authenticate?raw=true" 2>/dev/null)
+
+if [ -n "$TOKEN" ]; then
+    SUMMARY=$(curl -sk -H "Authorization: Bearer $TOKEN" "$API/agents/summary/status" 2>/dev/null)
+    for key in active disconnected never_connected pending total; do
+        value=$(printf '%s' "$SUMMARY" | sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\([0-9]\+\).*/\1/p" | head -1)
+        [ -n "$value" ] && send "wazuh.agents.$key" "$value"
+    done
+
+    NODES=$(curl -sk -H "Authorization: Bearer $TOKEN" "$API/cluster/nodes" 2>/dev/null \
+            | grep -o '"name"' | wc -l)
+    send "wazuh.cluster.nodes" "$NODES"
+    send "wazuh.api.available" "1"
+else
+    send "wazuh.api.available" "0"
+fi
+
+# --- Индексер: состояние кластера ------------------------------------
+HEALTH=$(curl -sk -u "snapshotter:{{ vault_indexer_snapshot_password }}" \
+         "$IDX/_cluster/health" 2>/dev/null)
+
+if [ -n "$HEALTH" ]; then
+    STATUS=$(printf '%s' "$HEALTH" | sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p')
+    case "$STATUS" in
+        green)  send "wazuh.indexer.status" 0 ;;
+        yellow) send "wazuh.indexer.status" 1 ;;
+        red)    send "wazuh.indexer.status" 2 ;;
+        *)      send "wazuh.indexer.status" 3 ;;
+    esac
+    for key in number_of_nodes active_shards unassigned_shards; do
+        value=$(printf '%s' "$HEALTH" | sed -n "s/.*\"$key\"[[:space:]]*:[[:space:]]*\([0-9]\+\).*/\1/p" | head -1)
+        [ -n "$value" ] && send "wazuh.indexer.$key" "$value"
+    done
+else
+    send "wazuh.indexer.status" 3
+fi
+
+# --- Поток событий ---------------------------------------------------
+# Очередь analysisd: если она заполнена, события отбрасываются,
+# и на графиках это выглядит как затишье.
+STATE_FILE=/var/ossec/var/run/wazuh-analysisd.state
+if [ -r "$STATE_FILE" ]; then
+    for key in events_processed events_dropped event_queue_usage rule_matching_queue_usage; do
+        value=$(sed -n "s/^$key='\([^']*\)'.*/\1/p" "$STATE_FILE")
+        [ -n "$value" ] && send "wazuh.analysisd.$key" "$value"
+    done
+fi
+
+# --- Свежесть последнего снапшота ------------------------------------
+LAST=$(curl -sk -u "snapshotter:{{ vault_indexer_snapshot_password }}" \
+       "$IDX/_snapshot/{{ snapshot_repo_name }}/_all?ignore_unavailable=true" 2>/dev/null \
+       | grep -o '"end_time_in_millis":[0-9]*' | tail -1 | cut -d: -f2)
+
+if [ -n "$LAST" ]; then
+    AGE_HOURS=$(( ( $(date +%s) - LAST / 1000 ) / 3600 ))
+    send "wazuh.snapshot.age_hours" "$AGE_HOURS"
+else
+    send "wazuh.snapshot.age_hours" "9999"
+fi
+
+exit 0

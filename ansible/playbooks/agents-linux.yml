@@ -1,0 +1,17 @@
+---
+# Установка агентов на Linux-серверы компании.
+#
+#   ansible-playbook playbooks/agents-linux.yml --ask-vault-pass
+#   ansible-playbook playbooks/agents-linux.yml --limit agents_bitrix --ask-vault-pass
+#
+# Агенты регистрируются на VIP {{ wazuh_vip_agents }}; enrollment (1515)
+# балансировщик направляет только на master-менеджер.
+
+- name: Агенты Wazuh на Linux
+  hosts: wazuh_agents_linux
+  gather_facts: true
+  become: true
+  serial: "25%"          # чтобы одновременная регистрация не завалила authd
+  tags: [agents]
+  roles:
+    - role: wazuh_agent

@@ -1,0 +1,83 @@
+---
+# =====================================================================
+#  Роли доступа к индексам. Управляется Ansible.
+#  Принцип: каждая служебная учётная запись получает ровно те права,
+#  без которых она не работает, и ни одним больше.
+# =====================================================================
+
+_meta:
+  type: "roles"
+  config_version: 2
+
+# Менеджеры: запись алертов и мониторинга, создание индексов по шаблону.
+wazuh_writer:
+  reserved: false
+  cluster_permissions:
+    - "cluster:monitor/main"
+    - "cluster:monitor/health"
+    - "cluster:admin/ingest/pipeline/get"
+    - "cluster:admin/ingest/pipeline/put"
+    - "indices:admin/template/get"
+    - "indices:admin/template/put"
+    - "indices:data/write/bulk"
+  index_permissions:
+    - index_patterns:
+        - "wazuh-alerts-*"
+        - "wazuh-archives-*"
+        - "wazuh-monitoring-*"
+        - "wazuh-statistics-*"
+        - "wazuh-states-vulnerabilities-*"
+      allowed_actions:
+        - "indices:admin/create"
+        - "indices:admin/mapping/put"
+        - "indices:admin/mappings/get"
+        - "indices:data/write/index"
+        - "indices:data/write/bulk*"
+        - "indices:data/read/search"
+        - "indices:admin/get"
+
+# Задание снапшотов: чтение индексов и работа с репозиторием.
+wazuh_snapshot:
+  reserved: false
+  cluster_permissions:
+    - "cluster:monitor/health"
+    - "cluster:admin/repository/get"
+    - "cluster:admin/repository/put"
+    - "cluster:admin/repository/verify"
+    - "cluster:admin/snapshot/create"
+    - "cluster:admin/snapshot/get"
+    - "cluster:admin/snapshot/delete"
+    - "cluster:admin/snapshot/status"
+  index_permissions:
+    - index_patterns:
+        - "wazuh-*"
+        - ".opendistro-ism-*"
+      allowed_actions:
+        - "indices:data/read/search"
+        - "indices:admin/get"
+        - "indices:monitor/settings/get"
+
+# Аудиторы: чтение алертов, никаких изменений.
+wazuh_reader:
+  reserved: false
+  cluster_permissions:
+    - "cluster:monitor/main"
+    - "cluster:monitor/health"
+    - "cluster_composite_ops_ro"
+  index_permissions:
+    - index_patterns:
+        - "wazuh-alerts-*"
+        - "wazuh-states-vulnerabilities-*"
+      allowed_actions:
+        - "read"
+        - "indices:admin/mappings/get"
+        - "indices:admin/get"
+    - index_patterns:
+        - ".kibana*"
+      allowed_actions:
+        - "read"
+  tenant_permissions:
+    - tenant_patterns:
+        - "global_tenant"
+      allowed_actions:
+        - "kibana_all_read"

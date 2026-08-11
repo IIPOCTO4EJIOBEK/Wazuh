@@ -1,0 +1,234 @@
+<!--
+  =====================================================================
+   Bitrix24, СЭД и приложение «Заявка на организацию рабочего места».
+   Диапазон идентификаторов: 100200–100299.
+
+   Защищаемые узлы:
+     web01  10.0.1.220   мастер, здесь ведётся правка кода
+     web02  10.0.1.221   реплика
+     b24-web-01 10.0.2.31 гипервизор и основной сервер портала
+     HAProxy 10.0.1.50, NPM 10.0.1.110 (внешний 185.160.36.97)
+
+   Ключевая мысль: каталог /home/bitrix/www доступен на запись учётной
+   записи разработчика и группе bitrix. Значит, подмена файла формы —
+   это и наиболее вероятный способ закрепиться в системе, и самый
+   заметный, если за каталогом следить в реальном времени.
+  =====================================================================
+-->
+
+<group name="ahp,ahp_bitrix,">
+
+  <!-- ================================================================
+       Целостность кода портала
+       ================================================================ -->
+
+  <rule id="100201" level="12">
+    <if_sid>550</if_sid>
+    <field name="file">^/home/bitrix/www/</field>
+    <description>Bitrix: изменён файл портала $(file) на $(agent.name)</description>
+    <mitre>
+      <id>T1505.003</id>
+    </mitre>
+    <group>bitrix_integrity,pci_dss_11.5,gdpr_II_5.1.f,</group>
+  </rule>
+
+  <!-- Новый файл в каталоге портала — типичная веб-оболочка.
+       Уровень выше, чем у изменения: легитимные правки идут через
+       sync_zayavka.sh и затрагивают известные файлы. -->
+  <rule id="100202" level="13">
+    <if_sid>554</if_sid>
+    <field name="file">^/home/bitrix/www/</field>
+    <description>Bitrix: в каталоге портала появился новый файл $(file)</description>
+    <mitre>
+      <id>T1505.003</id>
+    </mitre>
+    <group>bitrix_integrity,webshell,</group>
+  </rule>
+
+  <rule id="100203" level="14">
+    <if_sid>554,550</if_sid>
+    <field name="file" type="pcre2">^/home/bitrix/www/.+\.(php|phtml|php5|phar|inc)$</field>
+    <description>Bitrix: появился или изменён исполняемый PHP-файл $(file) вне процедуры синхронизации</description>
+    <mitre>
+      <id>T1505.003</id>
+      <id>T1105</id>
+    </mitre>
+    <group>bitrix_integrity,webshell,</group>
+  </rule>
+
+  <rule id="100204" level="13">
+    <if_sid>553</if_sid>
+    <field name="file" type="pcre2">^/home/bitrix/www/zayavka</field>
+    <description>Bitrix: удалён файл системы заявок $(file)</description>
+    <mitre>
+      <id>T1485</id>
+    </mitre>
+    <group>bitrix_integrity,</group>
+  </rule>
+
+  <!-- Список исполнителей и журнал заявок правятся скриптами. Ручная
+       правка допустима, но должна быть видна. -->
+  <rule id="100205" level="10">
+    <if_sid>550</if_sid>
+    <field name="file" type="pcre2">(zayavka_executors|zayavka_log)\.json$</field>
+    <description>Bitrix: изменён служебный файл системы заявок $(file)</description>
+    <group>bitrix_integrity,</group>
+  </rule>
+
+  <!-- ================================================================
+       Работа приложения заявок
+       ================================================================ -->
+
+  <rule id="100210" level="0">
+    <decoded_as>zayavka</decoded_as>
+    <description>Заявка РМ: событие приложения</description>
+  </rule>
+
+  <rule id="100211" level="7">
+    <if_sid>100210</if_sid>
+    <field name="zayavka.result">^denied$</field>
+    <description>Заявка РМ: отказ в доступе, пользователь $(dstuser) с адреса $(srcip)</description>
+    <mitre>
+      <id>T1078</id>
+    </mitre>
+    <group>access_denied,</group>
+  </rule>
+
+  <rule id="100212" level="12" frequency="10" timeframe="120">
+    <if_matched_sid>100211</if_matched_sid>
+    <same_source_ip />
+    <description>Заявка РМ: десять и более отказов в доступе с $(srcip) за две минуты</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failures,</group>
+  </rule>
+
+  <!-- Приложение внутреннее. Обращение из-за пределов корпоративных
+       сетей означает либо ошибку публикации на NPM, либо обход. -->
+  <rule id="100213" level="12">
+    <if_sid>100210</if_sid>
+    <field name="srcip" negate="yes" type="pcre2">^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.)</field>
+    <description>Заявка РМ: обращение с внешнего адреса $(srcip)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,</group>
+  </rule>
+
+  <!-- Перебор идентификаторов заявок в zayavka-view.php: попытка
+       прочитать чужие заявки с персональными данными сотрудников. -->
+  <rule id="100214" level="12" frequency="30" timeframe="60">
+    <if_matched_sid>100210</if_matched_sid>
+    <same_source_ip />
+    <field name="zayavka.action">^view$</field>
+    <description>Заявка РМ: перебор номеров заявок с $(srcip) — 30 просмотров за минуту</description>
+    <mitre>
+      <id>T1213</id>
+    </mitre>
+    <group>recon,gdpr_IV_32.2,</group>
+  </rule>
+
+  <!-- ================================================================
+       Синхронизация с ServiceDesk Plus
+       ================================================================ -->
+
+  <rule id="100220" level="0">
+    <decoded_as>sdp-sync</decoded_as>
+    <description>Синхронизация с ServiceDesk Plus: событие</description>
+  </rule>
+
+  <rule id="100221" level="7">
+    <if_sid>100220</if_sid>
+    <field name="sdp.errors" type="pcre2">^[1-9]</field>
+    <description>Синхронизация с SDP завершилась с ошибками: $(sdp.errors)</description>
+    <group>service_availability,</group>
+  </rule>
+
+  <rule id="100222" level="10">
+    <if_sid>100220</if_sid>
+    <field name="sdp.http_status" type="pcre2">^[45]\d\d$</field>
+    <description>ServiceDesk Plus отвечает кодом $(sdp.http_status) — синхронизация заявок нарушена</description>
+    <group>service_availability,</group>
+  </rule>
+
+  <!-- Три неудачных цикла подряд — это уже полчаса без синхронизации,
+       заявки в СЭД и в Битриксе разъезжаются. -->
+  <rule id="100223" level="12" frequency="3" timeframe="1200">
+    <if_matched_sid>100222</if_matched_sid>
+    <description>ServiceDesk Plus недоступен три цикла синхронизации подряд</description>
+    <group>service_availability,</group>
+  </rule>
+
+  <!-- ================================================================
+       Веб-атаки на портал
+       ================================================================ -->
+
+  <rule id="100230" level="13">
+    <if_sid>31103,31104,31105,31106</if_sid>
+    <list field="agent.name" lookup="match_key">etc/lists/ahp-critical-hosts</list>
+    <description>Атака на веб-приложение портала: $(agent.name), источник $(srcip)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,web_attack,pci_dss_6.5,</group>
+  </rule>
+
+  <rule id="100231" level="10">
+    <if_sid>31151</if_sid>
+    <description>Сканирование портала: серия ошибочных запросов с $(srcip)</description>
+    <mitre>
+      <id>T1595.003</id>
+    </mitre>
+    <group>web_scan,recon,</group>
+  </rule>
+
+  <!-- Обращение к служебным файлам, которых в публичном доступе быть
+       не должно: резервные копии, файлы окружения, каталог .git. -->
+  <rule id="100232" level="12">
+    <if_sid>31100,31101,31108</if_sid>
+    <field name="url" type="pcre2">(\.git/|\.env$|\.bak$|\.sql$|/backup/|zayavka_log\.json)</field>
+    <description>Попытка скачать служебный файл портала: $(url) с $(srcip)</description>
+    <mitre>
+      <id>T1595.003</id>
+      <id>T1213</id>
+    </mitre>
+    <group>web_scan,attack,</group>
+  </rule>
+
+  <!-- ================================================================
+       База данных портала (10.1.17.120 / .121)
+       ================================================================ -->
+
+  <rule id="100240" level="12">
+    <if_sid>5715</if_sid>
+    <list field="agent.name" lookup="match_key">etc/lists/ahp-critical-hosts</list>
+    <field name="dstuser" type="pcre2">^(bitrix|root|mysql)$</field>
+    <description>Вход служебной учётной записью $(dstuser) на узел СУБД портала $(agent.name)</description>
+    <mitre>
+      <id>T1078.003</id>
+    </mitre>
+    <group>authentication_success,</group>
+  </rule>
+
+  <rule id="100241" level="12">
+    <decoded_as>mysql_log</decoded_as>
+    <match>Access denied for user</match>
+    <description>MySQL/MariaDB портала: отказ в доступе для учётной записи</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failed,</group>
+  </rule>
+
+  <rule id="100242" level="13" frequency="8" timeframe="120">
+    <if_matched_sid>100241</if_matched_sid>
+    <same_source_ip />
+    <description>Подбор пароля к СУБД портала с $(srcip)</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failures,</group>
+  </rule>
+
+</group>

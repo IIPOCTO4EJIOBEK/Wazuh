@@ -1,0 +1,47 @@
+# =====================================================================
+#  Wazuh dashboard на {{ inventory_hostname }}. Управляется Ansible.
+# =====================================================================
+
+server.host: "0.0.0.0"
+server.port: {{ dashboard_port }}
+server.name: "{{ inventory_hostname }}"
+
+# Публичный адрес — VIP. Без него ссылки в отчётах и уведомлениях
+# ведут на конкретный узел, который может быть выключен.
+server.publicBaseUrl: "https://{{ wazuh_dashboard_fqdn }}"
+
+opensearch.hosts:
+{% for h in groups['wazuh_indexer'] %}
+  - "https://{{ hostvars[h].ansible_host }}:{{ indexer_http_port }}"
+{% endfor %}
+
+opensearch.ssl.verificationMode: certificate
+opensearch.ssl.certificateAuthorities: ["/etc/wazuh-dashboard/certs/root-ca.pem"]
+opensearch.username: "kibanaserver"
+opensearch.password: "{{ vault_indexer_kibanaserver_password }}"
+opensearch.requestHeadersWhitelist: ["securitytenant", "Authorization"]
+
+server.ssl.enabled: true
+server.ssl.certificate: "/etc/wazuh-dashboard/certs/dashboard.pem"
+server.ssl.key: "/etc/wazuh-dashboard/certs/dashboard-key.pem"
+
+# Многопользовательские пространства выключены: в компании один SOC,
+# а включённая многоарендность усложняет перенос сохранённых объектов.
+opensearch_security.multitenancy.enabled: false
+opensearch_security.readonly_mode.roles: ["kibana_read_only"]
+opensearch_security.cookie.secure: true
+opensearch_security.session.ttl: 28800000
+opensearch_security.session.keepalive: true
+
+uiSettings.overrides.defaultRoute: /app/wz-home
+uiSettings.overrides."theme:darkMode": false
+uiSettings.overrides."dateFormat:tz": "Europe/Moscow"
+uiSettings.overrides."timepicker:timeDefaults": '{ "from": "now-24h", "to": "now" }'
+
+# Телеметрия наружу отключена: сегмент мониторинга не имеет выхода
+# в интернет, а неудачные попытки отправки засоряют журнал.
+telemetry.enabled: false
+newsfeed.enabled: false
+usageCollection.enabled: false
+
+logging.dest: /var/log/wazuh-dashboard/dashboard.log

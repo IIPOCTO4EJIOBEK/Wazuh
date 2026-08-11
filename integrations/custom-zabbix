@@ -1,0 +1,35 @@
+#!/bin/sh
+# Обёртка интеграции zabbix. Управляется Ansible.
+# wazuh-integratord ищет файл с именем из <integration><name>,
+# поэтому сценарий на Python вызывается отсюда.
+WPYTHON_BIN="framework/python/bin/python3"
+SCRIPT_PATH_NAME="$0"
+DIR_NAME="$(cd $(dirname ${SCRIPT_PATH_NAME}); pwd -P)"
+SCRIPT_NAME="$(basename ${SCRIPT_PATH_NAME})"
+
+case "${DIR_NAME}" in
+    */active-response/bin | */wodles*)
+        if [ -z "${WAZUH_PATH}" ]; then
+            WAZUH_PATH="$(cd ${DIR_NAME}/../..; pwd)"
+        fi
+        PYTHON_SCRIPT="${DIR_NAME}/${SCRIPT_NAME}.py"
+    ;;
+    */bin)
+        if [ -z "${WAZUH_PATH}" ]; then
+            WAZUH_PATH="$(cd ${DIR_NAME}/..; pwd)"
+        fi
+        PYTHON_SCRIPT="${WAZUH_PATH}/framework/scripts/${SCRIPT_NAME}.py"
+    ;;
+    *)
+        WAZUH_PATH="$(cd ${DIR_NAME}/..; pwd)"
+        PYTHON_SCRIPT="${DIR_NAME}/${SCRIPT_NAME}.py"
+    ;;
+esac
+
+# Предпочитаем встроенный python Wazuh: на узле может не быть
+# системного python3 нужной версии.
+if [ -x "${WAZUH_PATH}/${WPYTHON_BIN}" ]; then
+    "${WAZUH_PATH}/${WPYTHON_BIN}" "${PYTHON_SCRIPT}" "$@"
+else
+    /usr/bin/env python3 "${PYTHON_SCRIPT}" "$@"
+fi

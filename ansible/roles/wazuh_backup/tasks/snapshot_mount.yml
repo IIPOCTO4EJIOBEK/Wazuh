@@ -1,0 +1,40 @@
+---
+# Общее хранилище снапшотов индексера.
+#
+# OpenSearch требует, чтобы репозиторий был смонтирован на всех узлах
+# по одному и тому же пути: снапшот пишут все узлы одновременно, каждый
+# свою часть шардов. Смонтировано на одном узле — снапшот не соберётся.
+
+- name: Клиент NFS
+  ansible.builtin.package:
+    name: "{{ 'nfs-common' if ansible_os_family == 'Debian' else 'nfs-utils' }}"
+    state: present
+
+- name: Точка монтирования
+  ansible.builtin.file:
+    path: "{{ snapshot_mount_point }}"
+    state: directory
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "0750"
+
+- name: Монтирование хранилища снапшотов
+  ansible.posix.mount:
+    path: "{{ snapshot_mount_point }}"
+    src: "{{ snapshot_nfs_server }}:{{ snapshot_nfs_export }}"
+    fstype: nfs
+    opts: "{{ snapshot_nfs_options }}"
+    state: mounted
+
+- name: Проверка записи в хранилище
+  ansible.builtin.copy:
+    dest: "{{ snapshot_mount_point }}/.write-test-{{ inventory_hostname }}"
+    content: "проверка доступа на запись с {{ inventory_hostname }}\n"
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "0640"
+
+- name: Удаление проверочного файла
+  ansible.builtin.file:
+    path: "{{ snapshot_mount_point }}/.write-test-{{ inventory_hostname }}"
+    state: absent

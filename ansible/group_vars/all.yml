@@ -1,0 +1,174 @@
+---
+# =====================================================================
+#  Wazuh для сети AH Prostory — общие переменные
+#  Всё, что меняется при переносе стенда в другую сеть, лежит здесь.
+#  Секреты — в vault.yml (см. vault.yml.example), в git не попадают.
+# =====================================================================
+
+# Корень репозитория wazuh-deploy: отсюда берутся правила, скрипты
+# active response, дашборды и скрипты резервного копирования.
+wazuh_content_dir: "{{ inventory_dir }}/../.."
+
+# ---------------------------------------------------------------------
+# Версия и репозитории
+# ---------------------------------------------------------------------
+wazuh_version: "4.14.7"          # ветка 4.x, актуальная на 07.2026
+wazuh_repo_branch: "4.x"
+wazuh_repo_url_apt: "https://packages.wazuh.com/{{ wazuh_repo_branch }}/apt"
+wazuh_repo_url_yum: "https://packages.wazuh.com/{{ wazuh_repo_branch }}/yum"
+wazuh_gpg_key_url: "https://packages.wazuh.com/key/GPG-KEY-WAZUH"
+
+# Filebeat, которым менеджер отгружает алерты в индексер.
+# Версия жёстко привязана к Wazuh: OSS 7.10.2 + модуль wazuh 0.4.
+filebeat_version: "7.10.2"
+filebeat_module_url: "https://packages.wazuh.com/{{ wazuh_repo_branch }}/filebeat/wazuh-filebeat-0.4.tar.gz"
+filebeat_template_url: "https://raw.githubusercontent.com/wazuh/wazuh/v{{ wazuh_version }}/extensions/elasticsearch/7.x/wazuh-template.json"
+
+# Пакеты закрепляются (hold / versionlock): обновление кластера —
+# только контролируемое, в порядке индексер → менеджер → дашборд.
+wazuh_pin_packages: true
+
+# ---------------------------------------------------------------------
+# Сеть и имена
+# ---------------------------------------------------------------------
+wazuh_domain: "ahprostory.ru"
+wazuh_dashboard_fqdn: "wazuh.{{ wazuh_domain }}"       # VIP дашборда
+wazuh_agents_fqdn: "wazuh-agents.{{ wazuh_domain }}"   # VIP приёма агентов
+
+# Виртуальные адреса keepalived
+wazuh_vip_agents: "10.5.2.90"
+wazuh_vip_dashboard: "10.5.2.91"
+wazuh_vrrp_interface: "eth0"
+wazuh_vrrp_id_agents: 90
+wazuh_vrrp_id_dashboard: 91
+
+# Сети, из которых разрешён доступ (nftables/ufw и allow-list active response)
+wazuh_trusted_networks:
+  - "10.0.0.0/8"
+  - "192.168.0.0/16"
+  - "172.16.0.0/12"
+
+# Сети и адреса, которые active response НИКОГДА не блокирует.
+# Сюда обязательно входят контроллеры домена, шлюзы, СХД и сам SOC.
+wazuh_ar_never_block:
+  - "10.5.2.0/24"        # сегмент мониторинга (Zabbix, Wazuh)
+  - "10.1.20.41"         # PDC-DB1, MSSQL
+  - "10.2.27.118"        # pdc-hv0, гипервизор
+  - "10.0.1.50"          # HAProxy Bitrix
+  - "10.0.1.110"         # Nginx Proxy Manager
+  - "10.0.1.220"         # web01
+  - "10.0.1.221"         # web02
+  - "10.0.2.31"          # b24-web-01
+  - "10.1.17.120"        # Bitrix DB primary
+  - "10.1.17.121"        # Bitrix DB replica
+  - "10.1.222.81"        # сервер резервных копий
+
+# ---------------------------------------------------------------------
+# Индексер (OpenSearch)
+# ---------------------------------------------------------------------
+indexer_cluster_name: "wazuh-ahp"
+indexer_http_port: 9200
+indexer_transport_port: 9300
+# Память JVM. Правило: половина ОЗУ узла, но не более 31 ГБ
+# (за 32 ГБ теряется compressed oops и производительность падает).
+indexer_heap_size: "8g"
+indexer_path_data: "/var/lib/wazuh-indexer"
+indexer_path_logs: "/var/log/wazuh-indexer"
+
+# Шардирование wazuh-alerts-*. Три узла данных → 3 первичных шарда,
+# 1 реплика: потеря любого одного узла не теряет данные.
+indexer_alerts_shards: 3
+indexer_alerts_replicas: 1
+
+# Политика жизненного цикла индексов (ISM)
+ism_hot_days: 7           # горячая фаза
+ism_warm_days: 30         # тёплая (read-only, force_merge)
+ism_cold_days: 90         # холодная (снапшот сделан, реплики сняты)
+ism_delete_days: 400      # удаление; 400 дней ≈ год + запас на проверки
+
+# ---------------------------------------------------------------------
+# Менеджер
+# ---------------------------------------------------------------------
+manager_cluster_name: "wazuh-ahp"
+manager_cluster_port: 1516
+manager_agent_port: 1514
+manager_enrollment_port: 1515
+manager_api_port: 55000
+manager_protocol: "tcp"          # только TCP: UDP теряет события под нагрузкой
+
+# Хранение алертов на самом менеджере (сверх индексера)
+manager_alerts_log_all: false    # archives.log — только при расследованиях
+manager_logall_json: false
+manager_rotate_alerts_days: 15
+
+# Агент, на котором выполняется блокировка учётной записи AD.
+# Это должен быть агент контроллера домена (группа dc): отключать
+# пользователя надо в каталоге, а не на скомпрометированной машине.
+# Узнать идентификатор: /var/ossec/bin/agent_control -l | grep <имя ДК>
+ar_domain_controller_agent_id: "001"
+
+# Порог, с которого алерт уезжает в почту и ServiceDesk
+alert_level_email: 10
+alert_level_servicedesk: 12
+alert_level_telegram: 10
+
+# ---------------------------------------------------------------------
+# Дашборд
+# ---------------------------------------------------------------------
+dashboard_port: 443
+dashboard_server_name: "{{ wazuh_dashboard_fqdn }}"
+
+# ---------------------------------------------------------------------
+# Резервирование
+# ---------------------------------------------------------------------
+# Репозиторий снапшотов индексера — общий NFS, смонтированный на всех
+# узлах индексера по одному и тому же пути (требование OpenSearch).
+snapshot_repo_name: "wazuh-snapshots"
+snapshot_mount_point: "/mnt/wazuh-snapshots"
+snapshot_nfs_server: "10.1.222.81"
+snapshot_nfs_export: "/srv/wazuh-snapshots"
+snapshot_nfs_options: "rw,hard,timeo=600,retrans=2,noatime,_netdev"
+snapshot_schedule_cron: "0 2 * * *"     # ежедневно в 02:00
+snapshot_keep_count: 30
+
+# Резервная копия конфигураций менеджера
+config_backup_dir: "/var/backups/wazuh"
+config_backup_cron: "30 1 * * *"
+config_backup_keep_days: 60
+
+# Выгрузка копий за пределы площадки (rclone уже настроен в компании)
+offsite_enabled: true
+offsite_rclone_remote: "gdrive:Backup/Wazuh"
+offsite_cron: "0 4 * * *"
+
+# ---------------------------------------------------------------------
+# Интеграции
+# ---------------------------------------------------------------------
+servicedesk_enabled: true
+servicedesk_url: "https://support.uk-n.ru"
+servicedesk_technician_group: "Служба технической поддержки"
+servicedesk_request_template: "Инцидент информационной безопасности"
+
+zabbix_enabled: true
+zabbix_server: "10.5.2.74"
+zabbix_sender_host: "wazuh-cluster"     # имя узла в Zabbix
+
+telegram_enabled: false                  # включить после выдачи бота
+
+smtp_enabled: true
+smtp_server: "10.1.20.25"
+smtp_port: 25
+smtp_from: "wazuh@{{ wazuh_domain }}"
+smtp_to:
+  - "it-security@{{ wazuh_domain }}"
+
+# ---------------------------------------------------------------------
+# Сертификаты внутреннего CA
+# ---------------------------------------------------------------------
+certs_local_dir: "files/wazuh-certificates"   # относительно ansible/
+certs_validity_days: 3650                     # CA
+certs_node_validity_days: 1825                # узловые
+certs_key_size: 2048
+certs_country: "RU"
+certs_org: "AH Prostory"
+certs_ou: "IT Security"

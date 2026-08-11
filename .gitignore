@@ -1,0 +1,26 @@
+# Секреты развёртывания: в репозиторий не попадают ни в открытом,
+# ни в зашифрованном виде.
+ansible/group_vars/vault.yml
+ansible/.vault_pass
+
+# Сертификаты внутреннего УЦ. Закрытые ключи хранятся там же, где
+# остальные ключи компании, — см. docs/03-installation.md, шаг 3.
+ansible/files/wazuh-certificates/
+
+# Локальные артефакты Ansible
+ansible/*.retry
+ansible/facts.d/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Редакторы и системный мусор
+*.swp
+*.tmp
+*~
+.DS_Store
+Thumbs.db

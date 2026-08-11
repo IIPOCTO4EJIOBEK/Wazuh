@@ -1,0 +1,81 @@
+---
+# Интеграции менеджера: ServiceDesk Plus, Zabbix, Telegram.
+#
+# Скрипты запускает wazuh-integratord, передавая им файл с алертом и
+# параметры из секции <integration> в ossec.conf. Пара файлов на
+# интеграцию — обёртка без расширения (её ищет integratord) и сам
+# сценарий на Python.
+
+- name: Скрипты интеграций
+  ansible.builtin.copy:
+    src: "{{ wazuh_content_dir }}/integrations/{{ item }}"
+    dest: "/var/ossec/integrations/{{ item }}"
+    owner: root
+    group: wazuh
+    mode: "0750"
+  loop:
+    - custom-servicedesk
+    - custom-servicedesk.py
+    - custom-telegram
+    - custom-telegram.py
+    - custom-zabbix
+    - custom-zabbix.py
+  notify: restart wazuh-manager
+
+- name: Настройки интеграций
+  ansible.builtin.template:
+    src: integrations.env.j2
+    dest: /var/ossec/etc/integrations.env
+    owner: root
+    group: wazuh
+    mode: "0640"
+  no_log: true
+  notify: restart wazuh-manager
+
+- name: Проверка ServiceDesk Plus
+  ansible.builtin.uri:
+    url: "{{ servicedesk_url }}/api/v3/requests"
+    method: GET
+    headers:
+      authtoken: "{{ vault_servicedesk_authtoken }}"
+      Accept: "application/vnd.manageengine.sdp.v3+json"
+    validate_certs: false
+    status_code: [200, 400, 401]
+    timeout: 20
+  register: sdp_check
+  failed_when: false
+  no_log: true
+  when: servicedesk_enabled
+
+- name: Результат проверки ServiceDesk Plus
+  ansible.builtin.debug:
+    msg: >-
+      ServiceDesk Plus ({{ servicedesk_url }}) отвечает кодом
+      {{ sdp_check.status | default('нет ответа') }}.
+      {{ 'Токен принят.' if sdp_check.status | default(0) == 200
+         else 'Проверить authtoken: заявки по инцидентам создаваться не будут.' }}
+  when: servicedesk_enabled
+
+- name: Утилита zabbix_sender
+  ansible.builtin.package:
+    name: zabbix-sender
+    state: present
+  when: zabbix_enabled
+  failed_when: false
+
+- name: Отправка состояния Wazuh в Zabbix
+  ansible.builtin.template:
+    src: wazuh-zabbix-report.sh.j2
+    dest: /usr/local/sbin/wazuh-zabbix-report.sh
+    owner: root
+    group: root
+    mode: "0750"
+  when: zabbix_enabled
+
+- name: Расписание отправки метрик в Zabbix
+  ansible.builtin.cron:
+    name: "wazuh zabbix metrics"
+    minute: "*/5"
+    job: "/usr/local/sbin/wazuh-zabbix-report.sh >/dev/null 2>&1"
+    user: root
+    state: "{{ 'present' if zabbix_enabled else 'absent' }}"

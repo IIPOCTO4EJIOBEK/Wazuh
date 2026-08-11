@@ -1,0 +1,8 @@
+---
+- name: Интеграции менеджера (ServiceDesk Plus, Zabbix, Telegram, почта)
+  hosts: wazuh_manager
+  gather_facts: true
+  become: true
+  tags: [integrations]
+  roles:
+    - role: wazuh_integrations

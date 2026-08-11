@@ -1,0 +1,13 @@
+---
+# reload, а не restart: перезапуск haproxy рвёт установленные
+# соединения агентов, и полторы сотни агентов одновременно
+# переподключаются к менеджеру.
+- name: reload haproxy
+  ansible.builtin.service:
+    name: haproxy
+    state: reloaded
+
+- name: restart keepalived
+  ansible.builtin.service:
+    name: keepalived
+    state: restarted

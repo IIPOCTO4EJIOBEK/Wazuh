@@ -1,0 +1,88 @@
+---
+# Раскладка сертификатов по узлам.
+#
+# Имя файла на узле всегда одинаковое (indexer.pem, manager.pem,
+# dashboard.pem) — конфиги от этого не зависят от имени хоста, и узел
+# можно пересобрать под другим именем, поменяв только сертификат.
+
+- name: Каталог сертификатов индексера
+  ansible.builtin.file:
+    path: /etc/wazuh-indexer/certs
+    state: directory
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "0500"
+  when: "'wazuh_indexer' in group_names"
+  ignore_errors: true      # каталог создаётся до установки пакета
+
+- name: Сертификаты узла индексера
+  ansible.builtin.copy:
+    src: "{{ certs_local_dir }}/{{ item.src }}"
+    dest: "/etc/wazuh-indexer/certs/{{ item.dest }}"
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: "root-ca.pem", dest: "root-ca.pem", mode: "0400" }
+    - { src: "{{ inventory_hostname }}.pem", dest: "indexer.pem", mode: "0400" }
+    - { src: "{{ inventory_hostname }}-key.pem", dest: "indexer-key.pem", mode: "0400" }
+    - { src: "admin.pem", dest: "admin.pem", mode: "0400" }
+    - { src: "admin-key.pem", dest: "admin-key.pem", mode: "0400" }
+  when: "'wazuh_indexer' in group_names"
+  notify: restart wazuh-indexer
+
+- name: Каталог сертификатов filebeat на менеджере
+  ansible.builtin.file:
+    path: /etc/filebeat/certs
+    state: directory
+    owner: root
+    group: root
+    mode: "0500"
+  when: "'wazuh_manager' in group_names"
+
+- name: Сертификаты менеджера
+  ansible.builtin.copy:
+    src: "{{ certs_local_dir }}/{{ item.src }}"
+    dest: "/etc/filebeat/certs/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0400"
+  loop:
+    - { src: "root-ca.pem", dest: "root-ca.pem" }
+    - { src: "{{ inventory_hostname }}.pem", dest: "manager.pem" }
+    - { src: "{{ inventory_hostname }}-key.pem", dest: "manager-key.pem" }
+  when: "'wazuh_manager' in group_names"
+  notify: restart filebeat
+
+- name: Каталог сертификатов дашборда
+  ansible.builtin.file:
+    path: /etc/wazuh-dashboard/certs
+    state: directory
+    owner: wazuh-dashboard
+    group: wazuh-dashboard
+    mode: "0500"
+  when: "'wazuh_dashboard' in group_names"
+  ignore_errors: true
+
+- name: Сертификаты дашборда
+  ansible.builtin.copy:
+    src: "{{ certs_local_dir }}/{{ item.src }}"
+    dest: "/etc/wazuh-dashboard/certs/{{ item.dest }}"
+    owner: wazuh-dashboard
+    group: wazuh-dashboard
+    mode: "0400"
+  loop:
+    - { src: "root-ca.pem", dest: "root-ca.pem" }
+    - { src: "{{ inventory_hostname }}.pem", dest: "dashboard.pem" }
+    - { src: "{{ inventory_hostname }}-key.pem", dest: "dashboard-key.pem" }
+  when: "'wazuh_dashboard' in group_names"
+  notify: restart wazuh-dashboard
+
+- name: Корневой сертификат в системное хранилище доверия
+  ansible.builtin.copy:
+    src: "{{ certs_local_dir }}/root-ca.pem"
+    dest: "{{ '/usr/local/share/ca-certificates/wazuh-root-ca.crt'
+              if ansible_os_family == 'Debian'
+              else '/etc/pki/ca-trust/source/anchors/wazuh-root-ca.crt' }}"
+    mode: "0644"
+  notify: update ca trust

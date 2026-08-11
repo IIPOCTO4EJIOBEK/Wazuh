@@ -1,0 +1,110 @@
+<!--
+  =====================================================================
+   Собственные декодеры AH Prostory.
+
+   Декодер разбирает строку журнала на поля, правило работает уже с
+   полями. Порядок в файле имеет значение: берётся первый подходящий
+   родительский декодер, поэтому специфичные идут раньше общих.
+
+   Регулярные выражения написаны без обратного возврата: движок OS_Regex
+   в Wazuh — не PCRE, конструкции вида (\S+)/(\S+) он разбирает
+   ненадёжно. Поэтому поля разделяются пробелом и ключом «имя=значение».
+
+   Формат строк, который для этого должны писать наши приложения,
+   описан в docs/07-detection-response.md, раздел «Журналы приложений».
+
+   Проверка после правки:
+       /var/ossec/bin/wazuh-logtest
+   и вставить строку журнала — вывод покажет сработавший декодер и поля.
+  =====================================================================
+-->
+
+<!-- ===================================================================
+     HAProxy (10.0.1.50) — балансировщик перед web01/web02
+     Пример: Server bitrix-web/web02 is DOWN, reason: Layer4 ...
+     =================================================================== -->
+<decoder name="haproxy">
+  <program_name>^haproxy</program_name>
+</decoder>
+
+<decoder name="haproxy">
+  <parent>haproxy</parent>
+  <prematch offset="after_parent">^Server </prematch>
+  <regex offset="after_parent">^Server (\S+) is (\w+)</regex>
+  <order>haproxy.server, haproxy.state</order>
+</decoder>
+
+<!-- ===================================================================
+     Приложение «Заявка на организацию рабочего места» (web01/web02).
+     Ожидаемый формат строки:
+       zayavka: request=REQ-2026-0042 user=ivanov ip=10.0.1.55
+                action=create result=denied
+     =================================================================== -->
+<decoder name="zayavka">
+  <prematch>^zayavka: </prematch>
+</decoder>
+
+<decoder name="zayavka">
+  <parent>zayavka</parent>
+  <regex offset="after_parent">request=(\S+) user=(\S+) ip=(\S+) action=(\S+) result=(\S+)</regex>
+  <order>zayavka.request_id, dstuser, srcip, zayavka.action, zayavka.result</order>
+</decoder>
+
+<!-- ===================================================================
+     Синхронизация с ServiceDesk Plus (zayavka_sync.php, cron каждые 5 мин)
+     Формат: sdp-sync: status=200 requests=14 errors=0
+     =================================================================== -->
+<decoder name="sdp-sync">
+  <prematch>^sdp-sync: </prematch>
+</decoder>
+
+<decoder name="sdp-sync">
+  <parent>sdp-sync</parent>
+  <regex offset="after_parent">status=(\d+) requests=(\d+) errors=(\d+)</regex>
+  <order>sdp.http_status, sdp.requests, sdp.errors</order>
+</decoder>
+
+<!-- ===================================================================
+     Агент обработки заявок на увольнение (dismissal-agent).
+     Формат файлового журнала агента:
+       dismissal-agent: request=12345 user=ivanov action=disable result=ok
+     =================================================================== -->
+<decoder name="dismissal-agent">
+  <prematch>^dismissal-agent: </prematch>
+</decoder>
+
+<decoder name="dismissal-agent">
+  <parent>dismissal-agent</parent>
+  <regex offset="after_parent">request=(\S+) user=(\S+) action=(\S+) result=(\S+)</regex>
+  <order>dismissal.request_id, dstuser, dismissal.action, dismissal.result</order>
+</decoder>
+
+<!-- ===================================================================
+     Резервное копирование (wazuh-backup.sh, rclone)
+     Формат: wazuh-backup: job=config target=gdrive status=ok size=482M
+     =================================================================== -->
+<decoder name="wazuh-backup">
+  <prematch>^wazuh-backup: </prematch>
+</decoder>
+
+<decoder name="wazuh-backup">
+  <parent>wazuh-backup</parent>
+  <regex offset="after_parent">job=(\S+) target=(\S+) status=(\S+) size=(\S+)</regex>
+  <order>backup.job, backup.target, backup.status, backup.size</order>
+</decoder>
+
+<!-- ===================================================================
+     Собственные скрипты active response.
+     Каждое действие пишет строку в active-responses.log — по ней
+     строится отчёт «что система заблокировала за сутки».
+     Формат: ahp-ar: action=block target=10.0.5.17 rule=100120 result=ok
+     =================================================================== -->
+<decoder name="ahp-ar">
+  <prematch>^ahp-ar: </prematch>
+</decoder>
+
+<decoder name="ahp-ar">
+  <parent>ahp-ar</parent>
+  <regex offset="after_parent">action=(\S+) target=(\S+) rule=(\d+) result=(\S+)</regex>
+  <order>ar.action, ar.target, ar.rule_id, ar.result</order>
+</decoder>

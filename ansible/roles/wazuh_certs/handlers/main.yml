@@ -1,0 +1,23 @@
+---
+- name: restart wazuh-indexer
+  ansible.builtin.service:
+    name: wazuh-indexer
+    state: restarted
+  failed_when: false          # при первом проходе служба ещё не установлена
+
+- name: restart filebeat
+  ansible.builtin.service:
+    name: filebeat
+    state: restarted
+  failed_when: false
+
+- name: restart wazuh-dashboard
+  ansible.builtin.service:
+    name: wazuh-dashboard
+    state: restarted
+  failed_when: false
+
+- name: update ca trust
+  ansible.builtin.command: >-
+    {{ 'update-ca-certificates' if ansible_os_family == 'Debian' else 'update-ca-trust extract' }}
+  changed_when: true

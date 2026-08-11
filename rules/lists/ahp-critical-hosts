@@ -1,0 +1,16 @@
+web01:bitrix-web
+web02:bitrix-web
+b24-web-01:bitrix-hv
+bitrix-db-01:database
+bitrix-db-02:database
+haproxy-01:edge
+npm-01:edge
+pdc-hv0:hypervisor
+pdc-db1:database
+zabbix-01:monitoring
+backup-01:backup
+wazuh-mgr-01:siem
+wazuh-mgr-02:siem
+wazuh-idx-01:siem
+wazuh-idx-02:siem
+wazuh-idx-03:siem

@@ -1,0 +1,21 @@
+---
+- name: Дашборды
+  hosts: wazuh_dashboard
+  gather_facts: true
+  become: true
+  serial: 1
+  tags: [dashboard]
+  roles:
+    - role: common
+    - role: wazuh_dashboard
+
+- name: Импорт объектов дашбордов AH Prostory
+  hosts: wazuh_dashboard[0]
+  gather_facts: false
+  become: true
+  tags: [dashboard, saved-objects]
+  tasks:
+    - name: Загрузка сохранённых объектов
+      ansible.builtin.include_role:
+        name: wazuh_dashboard
+        tasks_from: saved_objects

@@ -1,0 +1,103 @@
+---
+# Содержимое обнаружения и реагирования: декодеры, правила, списки CDB,
+# группы агентов, скрипты active response.
+#
+# Раскладывается только на master — worker получает всё это по каналу
+# синхронизации кластера (обычно в течение минуты).
+
+- name: Собственные декодеры
+  ansible.builtin.copy:
+    src: "{{ wazuh_content_dir }}/rules/local_decoder.xml"
+    dest: /var/ossec/etc/decoders/local_decoder.xml
+    owner: root
+    group: wazuh
+    mode: "0660"
+  notify: restart wazuh-manager
+
+- name: Собственные правила
+  ansible.builtin.copy:
+    src: "{{ wazuh_content_dir }}/rules/{{ item }}"
+    dest: "/var/ossec/etc/rules/{{ item }}"
+    owner: root
+    group: wazuh
+    mode: "0660"
+  loop:
+    - local_rules.xml
+    - ahp_windows_ad_rules.xml
+    - ahp_bitrix_rules.xml
+    - ahp_infrastructure_rules.xml
+  notify: restart wazuh-manager
+
+- name: Списки CDB
+  ansible.builtin.copy:
+    src: "{{ wazuh_content_dir }}/rules/lists/{{ item }}"
+    dest: "/var/ossec/etc/lists/{{ item }}"
+    owner: root
+    group: wazuh
+    mode: "0660"
+  loop:
+    - ahp-privileged-users
+    - ahp-critical-hosts
+  notify: rebuild cdb lists
+
+- name: Список адресов, которые нельзя блокировать
+  ansible.builtin.copy:
+    dest: /var/ossec/etc/lists/ar-never-block.txt
+    owner: root
+    group: wazuh
+    mode: "0660"
+    content: |
+      # Адреса и сети, которые active response не блокирует ни при каких
+      # условиях. Управляется Ansible (group_vars/all.yml → wazuh_ar_never_block).
+      {% for net in wazuh_ar_never_block %}
+      {{ net }}
+      {% endfor %}
+
+- name: Скрипты active response
+  ansible.builtin.copy:
+    src: "{{ wazuh_content_dir }}/active-response/{{ item }}"
+    dest: "/var/ossec/active-response/bin/{{ item }}"
+    owner: root
+    group: wazuh
+    mode: "0750"
+  loop:
+    - ahp-block-ip
+    - ahp-isolate-host.cmd
+    - ahp-isolate-host.ps1
+    - ahp-unisolate-host.ps1
+    - ahp-disable-ad-user.cmd
+    - ahp-disable-ad-user.ps1
+
+# ---------------------------------------------------------------------
+# Группы агентов. Состав проверок задаётся файлом agent.conf группы:
+# рабочей станции не нужен разбор журналов MSSQL, а контроллеру домена
+# не нужен мониторинг каталога Bitrix.
+# ---------------------------------------------------------------------
+- name: Каталоги групп агентов
+  ansible.builtin.file:
+    path: "/var/ossec/etc/shared/{{ item }}"
+    state: directory
+    owner: wazuh
+    group: wazuh
+    mode: "0750"
+  loop: "{{ wazuh_agent_group_list }}"
+
+- name: Конфигурация групп агентов
+  ansible.builtin.copy:
+    src: "{{ wazuh_content_dir }}/rules/agent-groups/{{ item }}.conf"
+    dest: "/var/ossec/etc/shared/{{ item }}/agent.conf"
+    owner: wazuh
+    group: wazuh
+    mode: "0640"
+  loop: "{{ wazuh_agent_group_list }}"
+  notify: restart wazuh-manager
+
+- name: Проверка конфигураций групп
+  ansible.builtin.command: "/var/ossec/bin/verify-agent-conf"
+  register: verify_conf
+  changed_when: false
+  failed_when: verify_conf.rc != 0
+
+- name: Проверка правил тестовыми событиями
+  ansible.builtin.include_tasks: rule_selftest.yml
+  when: wazuh_rules_selftest | default(true)

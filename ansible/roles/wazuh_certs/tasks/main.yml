@@ -1,0 +1,194 @@
+---
+# Выпуск сертификатов внутреннего УЦ на управляющей машине.
+#
+# Почему свой УЦ, а не wazuh-certs-tool.sh: срок, размер ключа и состав
+# SAN задаются явно, перевыпуск одного узла не трогает остальные, и всё
+# воспроизводится из этого репозитория.
+#
+# Требования OpenSearch, которые здесь учтены:
+#   * закрытый ключ в PKCS#8 — PKCS#1 плагин security не читает;
+#   * DN узлов из nodes_dn обязан совпадать с subject сертификата
+#     посимвольно (порядок RFC2253 — обратный выводу openssl);
+#   * административный сертификат должен быть отдельным от узловых.
+
+- name: Каталог сертификатов
+  ansible.builtin.file:
+    path: "{{ certs_local_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: Python-библиотека cryptography на управляющей машине
+  ansible.builtin.pip:
+    name: cryptography>=3.4
+    state: present
+  ignore_errors: true          # обычно уже стоит из пакетов дистрибутива
+
+- name: Проверка, выпущен ли уже корневой сертификат
+  ansible.builtin.stat:
+    path: "{{ certs_local_dir }}/root-ca.pem"
+  register: root_ca_stat
+
+- name: Признак необходимости выпуска
+  ansible.builtin.set_fact:
+    certs_generate: "{{ (not root_ca_stat.stat.exists) or (certs_force_regenerate | default(false)) }}"
+
+# ---------------------------------------------------------------------
+# Корневой УЦ
+# ---------------------------------------------------------------------
+- name: Ключ корневого УЦ
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_local_dir }}/root-ca.key"
+    size: 4096
+    type: RSA
+    format: pkcs8
+    mode: "0600"
+  when: certs_generate
+
+- name: Запрос корневого УЦ
+  community.crypto.openssl_csr:
+    path: "{{ certs_local_dir }}/root-ca.csr"
+    privatekey_path: "{{ certs_local_dir }}/root-ca.key"
+    common_name: "Wazuh Root CA"
+    organization_name: "{{ certs_org }}"
+    organizational_unit_name: "{{ certs_ou }}"
+    country_name: "{{ certs_country }}"
+    basic_constraints: ["CA:TRUE"]
+    basic_constraints_critical: true
+    key_usage: [keyCertSign, cRLSign, digitalSignature]
+    key_usage_critical: true
+    mode: "0600"
+  when: certs_generate
+
+- name: Самоподписанный корневой сертификат
+  community.crypto.x509_certificate:
+    path: "{{ certs_local_dir }}/root-ca.pem"
+    csr_path: "{{ certs_local_dir }}/root-ca.csr"
+    privatekey_path: "{{ certs_local_dir }}/root-ca.key"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ certs_validity_days }}d"
+    mode: "0644"
+  when: certs_generate
+
+# ---------------------------------------------------------------------
+# Административный сертификат (securityadmin.sh)
+# ---------------------------------------------------------------------
+- name: Ключ администратора индексера
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_local_dir }}/admin-key.pem"
+    size: "{{ certs_key_size }}"
+    type: RSA
+    format: pkcs8
+    mode: "0600"
+  when: certs_generate
+
+- name: Запрос администратора индексера
+  community.crypto.openssl_csr:
+    path: "{{ certs_local_dir }}/admin.csr"
+    privatekey_path: "{{ certs_local_dir }}/admin-key.pem"
+    common_name: "admin"
+    organization_name: "{{ certs_org }}"
+    organizational_unit_name: "{{ certs_ou }}"
+    country_name: "{{ certs_country }}"
+    basic_constraints: ["CA:FALSE"]
+    key_usage: [digitalSignature, keyEncipherment]
+    extended_key_usage: [clientAuth]
+    mode: "0600"
+  when: certs_generate
+
+- name: Сертификат администратора индексера
+  community.crypto.x509_certificate:
+    path: "{{ certs_local_dir }}/admin.pem"
+    csr_path: "{{ certs_local_dir }}/admin.csr"
+    provider: ownca
+    ownca_path: "{{ certs_local_dir }}/root-ca.pem"
+    ownca_privatekey_path: "{{ certs_local_dir }}/root-ca.key"
+    ownca_not_after: "+{{ certs_node_validity_days }}d"
+    mode: "0644"
+  when: certs_generate
+
+# ---------------------------------------------------------------------
+# Сертификаты узлов.
+# serverAuth + clientAuth нужны одновременно: узел индексера выступает
+# и сервером (HTTP/transport), и клиентом (transport к соседям).
+# ---------------------------------------------------------------------
+- name: Список узлов, которым нужен сертификат
+  ansible.builtin.set_fact:
+    cert_nodes: >-
+      {{ groups['wazuh_indexer'] + groups['wazuh_manager'] + groups['wazuh_dashboard'] }}
+
+- name: Ключи узлов
+  community.crypto.openssl_privatekey:
+    path: "{{ certs_local_dir }}/{{ item }}-key.pem"
+    size: "{{ certs_key_size }}"
+    type: RSA
+    format: pkcs8
+    mode: "0600"
+  loop: "{{ cert_nodes }}"
+  when: certs_generate
+
+- name: Запросы узлов
+  community.crypto.openssl_csr:
+    path: "{{ certs_local_dir }}/{{ item }}.csr"
+    privatekey_path: "{{ certs_local_dir }}/{{ item }}-key.pem"
+    common_name: "{{ item }}"
+    organization_name: "{{ certs_org }}"
+    organizational_unit_name: "{{ certs_ou }}"
+    country_name: "{{ certs_country }}"
+    basic_constraints: ["CA:FALSE"]
+    key_usage: [digitalSignature, keyEncipherment]
+    extended_key_usage: [serverAuth, clientAuth]
+    subject_alt_name: >-
+      {{ ['DNS:' + item,
+          'DNS:' + item + '.' + wazuh_domain,
+          'IP:' + hostvars[item].ansible_host]
+         + (['DNS:' + wazuh_dashboard_fqdn, 'IP:' + wazuh_vip_dashboard]
+            if item in groups['wazuh_dashboard'] else [])
+         + (['DNS:' + wazuh_agents_fqdn, 'IP:' + wazuh_vip_agents]
+            if item in groups['wazuh_manager'] else []) }}
+    mode: "0600"
+  loop: "{{ cert_nodes }}"
+  when: certs_generate
+
+- name: Сертификаты узлов
+  community.crypto.x509_certificate:
+    path: "{{ certs_local_dir }}/{{ item }}.pem"
+    csr_path: "{{ certs_local_dir }}/{{ item }}.csr"
+    provider: ownca
+    ownca_path: "{{ certs_local_dir }}/root-ca.pem"
+    ownca_privatekey_path: "{{ certs_local_dir }}/root-ca.key"
+    ownca_not_after: "+{{ certs_node_validity_days }}d"
+    mode: "0644"
+  loop: "{{ cert_nodes }}"
+  when: certs_generate
+
+- name: Срок действия выпущенных сертификатов
+  community.crypto.x509_certificate_info:
+    path: "{{ certs_local_dir }}/{{ item }}.pem"
+  loop: "{{ cert_nodes + ['root-ca', 'admin'] }}"
+  register: certs_info
+  when: not certs_generate
+
+- name: Сроки действия — в отчёт запуска
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item }}: действует до {{ item.not_after }}.
+      Перевыпуск — playbooks/certificates.yml -e certs_force_regenerate=true
+  loop: "{{ certs_info.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('') }}"
+  when:
+    - not certs_generate
+    - item.not_after is defined
+
+- name: Сертификат не должен истечь в ближайшие 30 суток
+  ansible.builtin.assert:
+    that: item.expired == false
+    fail_msg: >-
+      Сертификат {{ item.item }} просрочен ({{ item.not_after }}).
+      Кластер не поднимется, пока он не перевыпущен.
+  loop: "{{ certs_info.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('') }}"
+  when:
+    - not certs_generate
+    - item.expired is defined
