@@ -1,0 +1,1252 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Полное описание проекта внедрения Wazuh в сеть AH Prostory: архитектура, отказоустойчивость, обнаружение, реагирование, резервирование.">
+<title>Wazuh в сети AH Prostory</title>
+
+<style>
+/* ==================================================================
+   Палитра. Нейтрали уведены в холодный синий — это цвет консоли
+   мониторинга, а не безликий серый. Акцент один, бирюзовый.
+   Шкала severity семантическая и с акцентом не смешивается:
+   она кодирует реальные пять ступеней уровней Wazuh.
+   ================================================================== */
+:root {
+  --ground:      #eef1f5;
+  --surface:     #ffffff;
+  --surface-2:   #e4e9f0;
+  --ink:         #141b24;
+  --ink-2:       #3d4855;
+  --ink-3:       #6b7787;
+  --rule:        #cdd5e0;
+  --rule-soft:   #dee4ec;
+
+  --accent:      #0d6e79;
+  --accent-ink:  #0a565f;
+  --accent-wash: #d8ebed;
+
+  --sev-1: #5d6b7d;
+  --sev-2: #9a7418;
+  --sev-3: #b45c0c;
+  --sev-4: #b03a1a;
+  --sev-5: #99201d;
+
+  --ok:      #1a6f4b;
+  --ok-wash: #d9eee4;
+  --no:      #99201d;
+  --no-wash: #f6dedc;
+
+  --shadow: 0 1px 2px rgba(20, 27, 36, .06), 0 8px 24px -16px rgba(20, 27, 36, .3);
+
+  --serif: Georgia, "PT Serif", "Times New Roman", serif;
+  --sans:  system-ui, -apple-system, "Segoe UI", "Noto Sans", Arial, sans-serif;
+  --mono:  ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:    #0d1319;
+    --surface:   #151d26;
+    --surface-2: #1d2733;
+    --ink:       #e6ecf3;
+    --ink-2:     #b3bfcd;
+    --ink-3:     #7d8a99;
+    --rule:      #2b3743;
+    --rule-soft: #212c37;
+
+    --accent:      #4fbcc4;
+    --accent-ink:  #7ad3d8;
+    --accent-wash: #12333a;
+
+    --sev-1: #8996a6;
+    --sev-2: #d3a63c;
+    --sev-3: #e08a3c;
+    --sev-4: #e0684a;
+    --sev-5: #ea5a55;
+
+    --ok:      #4cbb8a;
+    --ok-wash: #123328;
+    --no:      #ea5a55;
+    --no-wash: #38191c;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px -18px rgba(0, 0, 0, .8);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:    #0d1319;
+  --surface:   #151d26;
+  --surface-2: #1d2733;
+  --ink:       #e6ecf3;
+  --ink-2:     #b3bfcd;
+  --ink-3:     #7d8a99;
+  --rule:      #2b3743;
+  --rule-soft: #212c37;
+
+  --accent:      #4fbcc4;
+  --accent-ink:  #7ad3d8;
+  --accent-wash: #12333a;
+
+  --sev-1: #8996a6;
+  --sev-2: #d3a63c;
+  --sev-3: #e08a3c;
+  --sev-4: #e0684a;
+  --sev-5: #ea5a55;
+
+  --ok:      #4cbb8a;
+  --ok-wash: #123328;
+  --no:      #ea5a55;
+  --no-wash: #38191c;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px -18px rgba(0, 0, 0, .8);
+}
+
+/* ==================================================================
+   Основа
+   ================================================================== */
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 24px 96px;
+}
+
+/* Проза держится узкой колонки, таблицы и схемы выходят на всю ширину */
+.prose { max-width: 68ch; }
+
+h1, h2, h3 { font-family: var(--serif); font-weight: 700; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.14; letter-spacing: -.015em; }
+h2 { font-size: clamp(22px, 3vw, 29px); line-height: 1.24; letter-spacing: -.01em; }
+h3 { font-size: 18px; line-height: 1.35; }
+
+p { margin: 0 0 1em; color: var(--ink-2); }
+p strong { color: var(--ink); font-weight: 600; }
+a { color: var(--accent-ink); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+code, .mono { font-family: var(--mono); font-size: .88em; }
+code {
+  background: var(--surface-2);
+  padding: .1em .38em;
+  border-radius: 4px;
+  color: var(--ink);
+}
+
+.eyebrow {
+  font-family: var(--sans);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  margin: 0 0 10px;
+}
+
+/* ==================================================================
+   Шапка
+   ================================================================== */
+.masthead {
+  padding: 72px 0 40px;
+  border-bottom: 1px solid var(--rule);
+}
+.masthead h1 { margin-bottom: 18px; }
+.lede {
+  font-size: 19px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 60ch;
+  margin: 0;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 1px;
+  margin-top: 40px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.fact { background: var(--surface); padding: 16px 18px; }
+.fact .n {
+  font-family: var(--serif);
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.fact .l {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--ink-3);
+  margin-top: 5px;
+}
+
+/* ==================================================================
+   Секции
+   ================================================================== */
+section { padding: 56px 0 0; }
+section > .prose > h2 { margin-bottom: 16px; }
+.section-head { margin-bottom: 22px; }
+
+/* ==================================================================
+   Таблицы
+   ================================================================== */
+.tw {
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  margin: 24px 0;
+}
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 520px; }
+th, td { padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+thead th {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+tbody tr:last-child td { border-bottom: 0; }
+td { color: var(--ink-2); }
+td:first-child { color: var(--ink); font-weight: 500; }
+td.num, td .mono { font-variant-numeric: tabular-nums; }
+
+/* Состояние читается формой, а не только словом */
+.pill {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  padding: 1px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.pill.yes { background: var(--ok-wash); color: var(--ok); }
+.pill.no  { background: var(--no-wash); color: var(--no); }
+
+/* ==================================================================
+   Шкала уровней
+   ================================================================== */
+.levels { display: flex; flex-direction: column; gap: 1px; margin: 26px 0; background: var(--rule); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.lvl {
+  display: grid;
+  grid-template-columns: 8px 74px 1fr;
+  gap: 0 16px;
+  align-items: center;
+  background: var(--surface);
+  padding: 13px 18px 13px 0;
+}
+.lvl .bar { align-self: stretch; border-radius: 0; }
+.lvl .rng {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  padding-left: 16px;
+}
+.lvl .txt { font-size: 14.5px; color: var(--ink-2); }
+.lvl .txt b { color: var(--ink); font-weight: 600; }
+.l1 .bar { background: var(--sev-1); }
+.l2 .bar { background: var(--sev-2); }
+.l3 .bar { background: var(--sev-3); }
+.l4 .bar { background: var(--sev-4); }
+.l5 .bar { background: var(--sev-5); }
+
+/* ==================================================================
+   Карточки
+   ================================================================== */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(258px, 1fr));
+  gap: 16px;
+  margin: 26px 0;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 20px 22px;
+  box-shadow: var(--shadow);
+}
+.card h3 { margin-bottom: 9px; }
+.card p { font-size: 14.5px; margin: 0; }
+.card p + p { margin-top: .7em; }
+
+/* Врезка: то, что нельзя пропустить */
+.note {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-wash);
+  border-radius: 0 10px 10px 0;
+  padding: 20px 24px;
+  margin: 28px 0;
+}
+.note h3 { margin-bottom: 8px; }
+.note p { margin: 0; font-size: 15px; }
+.note p + p { margin-top: .75em; }
+
+/* ==================================================================
+   Порядок установки — здесь нумерация правдива: это последовательность
+   ================================================================== */
+.steps { margin: 26px 0; border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; background: var(--surface); box-shadow: var(--shadow); }
+.step { display: grid; grid-template-columns: 44px 1fr; gap: 0 16px; padding: 15px 20px; border-bottom: 1px solid var(--rule-soft); }
+.step:last-child { border-bottom: 0; }
+.step .k {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-ink);
+  padding-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+.step h3 { font-size: 16px; margin-bottom: 3px; }
+.step p { margin: 0; font-size: 14.5px; }
+
+/* ==================================================================
+   Схема
+   ================================================================== */
+.figure { margin: 30px 0; }
+.figure .frame {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 22px;
+  box-shadow: var(--shadow);
+}
+.figure svg { display: block; min-width: 660px; width: 100%; height: auto; }
+figcaption { font-size: 13.5px; color: var(--ink-3); margin-top: 12px; max-width: 68ch; }
+
+.svg-box     { fill: var(--surface-2); stroke: var(--rule); stroke-width: 1; }
+.svg-box-acc { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.5; }
+.svg-t       { fill: var(--ink); font-family: var(--sans); font-size: 13px; font-weight: 600; }
+.svg-s       { fill: var(--ink-3); font-family: var(--mono); font-size: 11px; }
+.svg-l       { fill: var(--ink-3); font-family: var(--mono); font-size: 11px; }
+.svg-line    { stroke: var(--ink-3); stroke-width: 1.5; fill: none; }
+.svg-line-acc{ stroke: var(--accent); stroke-width: 1.5; fill: none; }
+
+/* ==================================================================
+   Списки
+   ================================================================== */
+ul.plain { list-style: none; padding: 0; margin: 18px 0; display: flex; flex-direction: column; gap: 11px; }
+ul.plain li {
+  padding-left: 20px;
+  position: relative;
+  color: var(--ink-2);
+  font-size: 15px;
+}
+ul.plain li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: .62em;
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+ul.plain li b { color: var(--ink); font-weight: 600; }
+
+/* ==================================================================
+   Подвал
+   ================================================================== */
+.foot {
+  margin-top: 64px;
+  padding-top: 28px;
+  border-top: 1px solid var(--rule);
+  font-size: 14px;
+  color: var(--ink-3);
+}
+.foot p { color: var(--ink-3); font-size: 14px; }
+
+@media (max-width: 620px) {
+  .page { padding: 0 18px 72px; }
+  .masthead { padding-top: 48px; }
+  .lvl { grid-template-columns: 8px 66px 1fr; gap: 0 12px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow">Проект внедрения · 2026</p>
+    <h1>Wazuh в сети AH&nbsp;Prostory</h1>
+    <p class="lede">
+      Система обнаружения инцидентов информационной безопасности: сбор событий
+      со всей инфраструктуры компании, анализ, автоматическое реагирование и
+      резервирование на каждом уровне. Правила написаны под конкретные системы
+      компании — Bitrix, Active Directory, Hyper-V, MSSQL, ServiceDesk Plus.
+    </p>
+
+    <div class="facts">
+      <div class="fact"><div class="n">9</div><div class="l">виртуальных машин</div></div>
+      <div class="fact"><div class="n">~400</div><div class="l">агентов на узлах</div></div>
+      <div class="fact"><div class="n">~410</div><div class="l">событий в секунду</div></div>
+      <div class="fact"><div class="n">400</div><div class="l">суток хранения</div></div>
+      <div class="fact"><div class="n">0</div><div class="l">точек отказа</div></div>
+    </div>
+  </header>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Задача</p>
+      <h2>Что именно решается</h2>
+      <p>
+        До внедрения журналы событий оставались на самих узлах, и любое
+        происшествие разбиралось постфактум — когда последствия уже наступили.
+        Показательный случай: <strong>09.06.2026 на гипервизоре pdc-hv0 отказал
+        массив FUJITSU ETERNUS_DXL</strong>. В 17:37 драйвер диска сообщил об
+        ошибке, через 47 секунд сервер перезагрузился, в 17:59 повредилась
+        файловая система и часть отложенной записи не дошла до диска. Все три
+        события лежали в журналах Windows — и никто не увидел их вовремя.
+      </p>
+      <p>
+        Задача платформы — превратить такие события из записи в журнале в
+        сигнал, на который кто-то реагирует. И сделать это так, чтобы сама
+        платформа не стала новой точкой отказа.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Архитектура</p>
+      <h2>Топология и потоки данных</h2>
+      <p>
+        Платформа размещена в сегменте мониторинга <code>10.5.2.0/24</code> —
+        там же, где Zabbix. У этого сегмента уже согласованы правила доступа
+        ко всем сетям компании: система мониторинга по определению должна
+        дотягиваться везде.
+      </p>
+    </div>
+
+    <figure class="figure">
+      <div class="frame">
+        <svg viewBox="0 0 920 476" role="img"
+             aria-label="Схема: агенты передают события через виртуальный адрес балансировщика на два менеджера, менеджеры отгружают алерты в кластер из трёх узлов индексера, откуда данные читают дашборды и уходят снапшоты на NFS">
+
+          <!-- Агенты -->
+          <g>
+            <rect class="svg-box" x="10"  y="8" width="215" height="52" rx="7"/>
+            <rect class="svg-box" x="237" y="8" width="215" height="52" rx="7"/>
+            <rect class="svg-box" x="464" y="8" width="215" height="52" rx="7"/>
+            <rect class="svg-box" x="691" y="8" width="219" height="52" rx="7"/>
+            <text class="svg-t" x="117" y="30" text-anchor="middle">Active Directory</text>
+            <text class="svg-s" x="117" y="47" text-anchor="middle">2 контроллера домена</text>
+            <text class="svg-t" x="344" y="30" text-anchor="middle">Hyper-V · MSSQL</text>
+            <text class="svg-s" x="344" y="47" text-anchor="middle">25 серверов Windows</text>
+            <text class="svg-t" x="571" y="30" text-anchor="middle">Bitrix · HAProxy</text>
+            <text class="svg-s" x="571" y="47" text-anchor="middle">15 серверов Linux</text>
+            <text class="svg-t" x="800" y="30" text-anchor="middle">Рабочие станции</text>
+            <text class="svg-s" x="800" y="47" text-anchor="middle">350 машин</text>
+          </g>
+
+          <!-- Агенты → VIP -->
+          <path class="svg-line" d="M460 60 L460 96"/>
+          <path class="svg-line" d="M454 90 L460 97 L466 90"/>
+          <text class="svg-l" x="472" y="82">1514/tcp события · 1515/tcp регистрация</text>
+
+          <!-- VIP -->
+          <rect class="svg-box-acc" x="210" y="100" width="500" height="54" rx="7"/>
+          <text class="svg-t" x="460" y="123" text-anchor="middle">HAProxy + keepalived · два узла</text>
+          <text class="svg-s" x="460" y="141" text-anchor="middle">VIP 10.5.2.90 приём агентов · VIP 10.5.2.91 дашборд</text>
+
+          <!-- VIP → менеджеры -->
+          <path class="svg-line" d="M340 154 L340 176 L295 176 L295 196"/>
+          <path class="svg-line" d="M289 190 L295 197 L301 190"/>
+          <path class="svg-line" d="M580 154 L580 176 L625 176 L625 196"/>
+          <path class="svg-line" d="M619 190 L625 197 L631 190"/>
+
+          <!-- Менеджеры -->
+          <rect class="svg-box" x="170" y="200" width="250" height="62" rx="7"/>
+          <rect class="svg-box" x="500" y="200" width="250" height="62" rx="7"/>
+          <text class="svg-t" x="295" y="224" text-anchor="middle">wazuh-mgr-01 · master</text>
+          <text class="svg-s" x="295" y="242" text-anchor="middle">10.5.2.85 · правила, AR, API</text>
+          <text class="svg-t" x="625" y="224" text-anchor="middle">wazuh-mgr-02 · worker</text>
+          <text class="svg-s" x="625" y="242" text-anchor="middle">10.5.2.86 · правила, AR, API</text>
+
+          <!-- Связь кластера -->
+          <path class="svg-line" d="M420 231 L500 231"/>
+          <text class="svg-l" x="460" y="224" text-anchor="middle">1516</text>
+
+          <!-- Менеджеры → индексер -->
+          <path class="svg-line-acc" d="M295 262 L295 286 L460 286 L460 306"/>
+          <path class="svg-line-acc" d="M625 262 L625 286 L460 286"/>
+          <path class="svg-line-acc" d="M454 300 L460 307 L466 300"/>
+          <text class="svg-l" x="472" y="300">filebeat · 9200/tcp, TLS</text>
+
+          <!-- Индексер -->
+          <rect class="svg-box" x="60"  y="310" width="240" height="58" rx="7"/>
+          <rect class="svg-box" x="340" y="310" width="240" height="58" rx="7"/>
+          <rect class="svg-box" x="620" y="310" width="240" height="58" rx="7"/>
+          <text class="svg-t" x="180" y="333" text-anchor="middle">wazuh-idx-01</text>
+          <text class="svg-s" x="180" y="351" text-anchor="middle">10.5.2.81</text>
+          <text class="svg-t" x="460" y="333" text-anchor="middle">wazuh-idx-02</text>
+          <text class="svg-s" x="460" y="351" text-anchor="middle">10.5.2.82</text>
+          <text class="svg-t" x="740" y="333" text-anchor="middle">wazuh-idx-03</text>
+          <text class="svg-s" x="740" y="351" text-anchor="middle">10.5.2.83</text>
+          <text class="svg-l" x="460" y="384" text-anchor="middle">кворум 2 из 3 · 3 шарда + реплика · 9300/tcp между узлами</text>
+
+          <!-- Индексер → потребители -->
+          <path class="svg-line" d="M180 368 L180 400 L250 400 L250 414"/>
+          <path class="svg-line" d="M244 408 L250 415 L256 408"/>
+          <path class="svg-line" d="M740 368 L740 400 L670 400 L670 414"/>
+          <path class="svg-line" d="M664 408 L670 415 L676 408"/>
+
+          <!-- Потребители -->
+          <rect class="svg-box" x="60"  y="418" width="380" height="50" rx="7"/>
+          <rect class="svg-box" x="480" y="418" width="380" height="50" rx="7"/>
+          <text class="svg-t" x="250" y="440" text-anchor="middle">Дашборды · два узла</text>
+          <text class="svg-s" x="250" y="457" text-anchor="middle">10.5.2.88 · 10.5.2.89 · 443/tcp</text>
+          <text class="svg-t" x="670" y="440" text-anchor="middle">Снапшоты на NFS</text>
+          <text class="svg-s" x="670" y="457" text-anchor="middle">10.1.222.81 · ежедневно, 30 копий</text>
+        </svg>
+      </div>
+      <figcaption>
+        Регистрация агентов идёт отдельным потоком и всегда направляется на
+        master: служба <span class="mono">wazuh-authd</span> работает только
+        там. Это единственная функция, которая не переживает отказ
+        master-менеджера, — и это осознанное решение, а не упущение.
+      </figcaption>
+    </figure>
+
+    <div class="prose">
+      <h3>Почему именно такие числа</h3>
+      <ul class="plain">
+        <li><b>Три узла индексера, а не два.</b> Кластеру нужен кворум. Из двух узлов кворум — оба, то есть отказ любого останавливает хранение. Из трёх кворум — два: отказ одного узла ничего не меняет.</li>
+        <li><b>Два менеджера, а не три.</b> Менеджер не хранит данные и не выбирает мастера голосованием. Второй узел нужен, чтобы приём событий пережил перезагрузку первого, и этого достаточно.</li>
+        <li><b>Отдельные балансировщики.</b> Узел, решающий, куда направить поток, не совпадает с узлом, который этот поток обрабатывает. Зависший менеджер продолжал бы считать себя живым.</li>
+        <li><b>Два независимых виртуальных адреса.</b> Авария в интерфейсе не утаскивает за собой приём событий. Сбор данных важнее их показа: пропущенное событие не восстановить, дашборд подождёт.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Отказоустойчивость</p>
+      <h2>Что переживает отказ, а что нет</h2>
+      <p>
+        Таблица описывает поведение честно, включая единственный случай
+        частичной потери функций.
+      </p>
+    </div>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr>
+            <th>Что отказало</th>
+            <th>Приём событий</th>
+            <th>Регистрация</th>
+            <th>Интерфейс</th>
+            <th>Поиск</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Один узел индексера</td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+          </tr>
+          <tr>
+            <td>Два узла индексера</td>
+            <td><span class="pill no">остановлен</span></td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill no">нет</span></td>
+            <td><span class="pill no">нет</span></td>
+          </tr>
+          <tr>
+            <td>Менеджер worker</td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+          </tr>
+          <tr>
+            <td>Менеджер master</td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill no">нет</span></td>
+            <td><span class="pill yes">чтение</span></td>
+            <td><span class="pill yes">работает</span></td>
+          </tr>
+          <tr>
+            <td>Один балансировщик</td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+          </tr>
+          <tr>
+            <td>Один узел дашборда</td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+          </tr>
+          <tr>
+            <td>Хранилище снапшотов</td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+            <td><span class="pill yes">работает</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>
+        Строка про потерю двух узлов индексера — не упущение, а свойство
+        кворума: три узла защищают от одного отказа, а не от двух. Защита от
+        двух одновременных отказов потребовала бы пяти узлов, и для сети такого
+        размера это неоправданно.
+      </p>
+    </div>
+
+    <div class="note">
+      <h3>Резервирование проверяется учениями, а не документом</h3>
+      <p>
+        В составе проекта — сценарий <span class="mono">failover-test.sh</span>,
+        который по очереди выводит из строя узел индексера, worker, master,
+        балансировщик с виртуальным адресом и узел дашборда, после каждого шага
+        возвращая систему на место. Главный показатель во всех пяти сценариях
+        один: не прервался ли приём событий.
+      </p>
+      <p>
+        Периодичность — раз в квартал и после каждого изменения топологии.
+        Результаты вносятся в журнал учений.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Обнаружение</p>
+      <h2>Уровни и что за ними следует</h2>
+      <p>
+        Каждому уровню соответствует не «важность вообще», а конкретное
+        действие конкретного человека или системы.
+      </p>
+    </div>
+
+    <div class="levels">
+      <div class="lvl l1">
+        <div class="bar"></div>
+        <div class="rng">3–6</div>
+        <div class="txt"><b>Только в дашборд.</b> Никто не реагирует, смотрят при разборе.</div>
+      </div>
+      <div class="lvl l2">
+        <div class="bar"></div>
+        <div class="rng">7–9</div>
+        <div class="txt"><b>Дежурный в рабочее время.</b> Разбор без спешки.</div>
+      </div>
+      <div class="lvl l3">
+        <div class="bar"></div>
+        <div class="rng">10–11</div>
+        <div class="txt"><b>Почта и Telegram.</b> Разбор в течение часа.</div>
+      </div>
+      <div class="lvl l4">
+        <div class="bar"></div>
+        <div class="rng">12–14</div>
+        <div class="txt"><b>Заявка в ServiceDesk Plus и сигнал в Zabbix.</b> Реагирование немедленное.</div>
+      </div>
+      <div class="lvl l5">
+        <div class="bar"></div>
+        <div class="rng">15</div>
+        <div class="txt"><b>Система уже действует.</b> Блокировка адреса, изоляция станции или отключение учётной записи. Человек разбирается с последствиями, а не предотвращает событие.</div>
+      </div>
+    </div>
+
+    <div class="prose">
+      <h3>Собственные правила</h3>
+      <p>
+        Помимо штатного набора Wazuh написаны правила под конкретные системы
+        компании. Идентификаторы разведены по файлам, чтобы правки одного
+        участка не задевали остальные.
+      </p>
+    </div>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Диапазон</th><th>Область</th><th>Что закрывает</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">100000–100099</td>
+            <td>Платформа и доступ</td>
+            <td>Правки конфигурации самой Wazuh, подбор паролей SSH, вход под root, sudo вне списка привилегированных, остановка аудита, молчание агента на критичном узле</td>
+          </tr>
+          <tr>
+            <td class="mono">100200–100299</td>
+            <td>Bitrix и заявки</td>
+            <td>Целостность кода портала, появление PHP-файлов, перебор номеров заявок, обращение с внешнего адреса, разрыв синхронизации с ServiceDesk Plus, атаки на веб</td>
+          </tr>
+          <tr>
+            <td class="mono">100300–100399</td>
+            <td>Windows и Active Directory</td>
+            <td>Распыление паролей, Kerberoasting, обращение к памяти LSASS, изменения привилегированных групп, очистка журналов, шифровальщики, инструменты атакующего</td>
+          </tr>
+          <tr>
+            <td class="mono">100400–100499</td>
+            <td>Инфраструктура</td>
+            <td>Дисковая подсистема и СХД, HAProxy, MSSQL, репликация СУБД, резервное копирование, состояние самого кластера Wazuh</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <h3>Отказ хранилища</h3>
+        <p>
+          Правило <span class="mono">100414</span> срабатывает на
+          последовательность из инцидента 09.06.2026: событие дисковой
+          подсистемы, а следом перезагрузка того же узла в течение десяти минут.
+          Тогда это выглядело как два независимых сбоя.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Код портала</h3>
+        <p>
+          Каталог <span class="mono">/home/bitrix/www</span> доступен на запись
+          учётной записи разработчика. Там же лежит журнал заявок с
+          персональными данными сотрудников. Контроль ведётся в реальном
+          времени с записью различий.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Молчание агента</h3>
+        <p>
+          Отсутствие событий с контроллера домена внешне неотличимо от
+          успешного отключения журналирования атакующим. Для рядового узла это
+          уровень 5, для узла из списка критичных — 12.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Проверка правил</h3>
+        <p>
+          При каждой раскатке образцы событий прогоняются через
+          <span class="mono">wazuh-logtest</span>, и установка прерывается, если
+          хоть одно правило не сработало. Правило с опечаткой молчит и выглядит
+          ровно так же, как правило, для которого просто не было событий.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Реагирование</p>
+      <h2>Что система делает сама</h2>
+      <p>
+        Автоматическое реагирование опаснее большинства атак, от которых оно
+        защищает. Поэтому предохранителей в нём больше, чем самой логики.
+      </p>
+    </div>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Действие</th><th>Когда</th><th>Где выполняется</th><th>Срок</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Блокировка адреса</td>
+            <td>Подбор паролей, сканирование, атака на веб</td>
+            <td>На атакуемом узле</td>
+            <td>30 мин, при повторах до 8 ч</td>
+          </tr>
+          <tr>
+            <td>Изоляция станции</td>
+            <td>Вредоносное ПО, шифровальщик</td>
+            <td>На самой станции</td>
+            <td>1 час</td>
+          </tr>
+          <tr>
+            <td>Блокировка учётной записи</td>
+            <td>Признаки компрометации</td>
+            <td>На контроллере домена</td>
+            <td>До возврата вручную</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <h3>Список неблокируемых</h3>
+        <p>
+          Контроллеры домена, гипервизор, балансировщики, узлы портала, СУБД и
+          весь сегмент мониторинга не блокируются ни при каких условиях.
+          Отдельно и независимо от списка защищён шлюз по умолчанию.
+        </p>
+        <p>
+          Срабатывание защиты само становится событием: значит, либо правило
+          слишком широкое, либо атака идёт изнутри доверенной сети.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Изоляция — только рабочие станции</h3>
+        <p>
+          Скрипт проверяет тип операционной системы и отказывается изолировать
+          сервер или контроллер домена. Изоляция контроллера домена
+          останавливает работу всей компании — это дороже любого вредоноса на
+          одной машине.
+        </p>
+        <p>
+          У изолированной машины остаётся доступ к менеджерам Wazuh и
+          контроллерам домена: иначе её нельзя будет разблокировать удалённо, а
+          после перезагрузки никто не войдёт под доменной учётной записью.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Учётные записи — самое ограниченное</h3>
+        <p>
+          Администраторы домена, предприятия, схемы и операторы не блокируются
+          никогда — только сообщение и передача человеку. Служебные записи
+          защищены поимённо.
+        </p>
+        <p>
+          Не более трёх блокировок в час: превышение означает либо ошибку в
+          правиле, либо атаку, рассчитанную на массовую блокировку сотрудников
+          как способ остановить работу компании.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Возврат предусмотрен заранее</h3>
+        <p>
+          Состав групп и состояние учётной записи сохраняются в файл до
+          изменения. Автоматической разблокировки нет: возврат доступа — решение
+          человека после разбора.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Резервирование данных</p>
+      <h2>Три копии с разными сроками</h2>
+      <p>
+        Резервируются три разные вещи, и путать их нельзя: копия конфигурации
+        без снапшота даёт работающую систему без истории, а снапшот без
+        конфигурации — историю без возможности принять агентов.
+      </p>
+    </div>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Что</th><th>Куда</th><th>Как часто</th><th>Хранится</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Индексы событий</td>
+            <td>Снапшоты на общий NFS</td>
+            <td>Ежедневно в 02:00</td>
+            <td>30 копий</td>
+          </tr>
+          <tr>
+            <td>Конфигурация менеджеров</td>
+            <td>Архив на узле и выгрузка через rclone</td>
+            <td>Ежедневно в 01:30</td>
+            <td>60 суток</td>
+          </tr>
+          <tr>
+            <td>Правила и код развёртывания</td>
+            <td>Репозиторий git</td>
+            <td>При каждом изменении</td>
+            <td>Всегда</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Сценарий</th><th>Потеря данных</th><th>Время восстановления</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Отказ одного узла индексера</td><td>нет</td><td>работа не прерывается</td></tr>
+          <tr><td>Отказ одного менеджера</td><td>нет</td><td>работа не прерывается</td></tr>
+          <tr><td>Потеря индекса за сутки</td><td>до 24 часов</td><td>1–3 часа</td></tr>
+          <tr><td>Полная потеря менеджера</td><td>нет</td><td>около часа</td></tr>
+          <tr><td>Полная потеря кластера индексера</td><td>до 24 часов</td><td>4–8 часов</td></tr>
+          <tr><td>Потеря площадки</td><td>все исторические события</td><td>1–2 суток на новом месте</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>
+        Самый ценный файл во всей установке — <span class="mono">client.keys</span>
+        с ключами агентов. Он весит килобайты, а его потеря означает повторную
+        регистрацию четырёхсот машин. Базы состояния копируются
+        средствами СУБД, а не обычным копированием: файл, снятый на ходу, может
+        оказаться несогласованным, и выяснится это только при восстановлении.
+      </p>
+      <p>
+        Неудачное копирование само поднимает алерт, а две неудачи подряд —
+        заявку в ServiceDesk Plus. Резервное копирование, о поломке которого
+        никто не узнаёт, бесполезно.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Оповещение</p>
+      <h2>Три канала с разным назначением</h2>
+      <p>
+        Дублирование здесь осознанное: у каналов разная надёжность и разное
+        время реакции.
+      </p>
+    </div>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Канал</th><th>Порог</th><th>Что даёт</th><th>Чего не даёт</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>ServiceDesk Plus</td>
+            <td class="num">12+</td>
+            <td>Учёт, владельца, срок реакции</td>
+            <td>Скорости — заявку могут увидеть через час</td>
+          </tr>
+          <tr>
+            <td>Telegram</td>
+            <td class="num">10+</td>
+            <td>Скорость: минуты до первого взгляда</td>
+            <td>Учёта, сообщение теряется в чате</td>
+          </tr>
+          <tr>
+            <td>Zabbix</td>
+            <td class="num">10+</td>
+            <td>Эскалацию по расписанию дежурств</td>
+            <td>Подробностей события</td>
+          </tr>
+          <tr>
+            <td>Почта</td>
+            <td class="num">10+</td>
+            <td>Привычный канал, работает всегда</td>
+            <td>И того, и другого</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <h3>Отказ SIEM не может быть замечен самой SIEM</h3>
+      <p>
+        Поэтому состояние платформы контролируется извне — тем самым Zabbix, где
+        уже настроены эскалации и расписание дежурств. Раз в пять минут туда
+        уходят шестнадцать метрик: состояние кластера индексера, число узлов,
+        сводка по агентам, поток обработанных и отброшенных событий, заполнение
+        очередей, возраст последнего снапшота.
+      </p>
+      <p>
+        Из одиннадцати триггеров отдельного упоминания заслуживает один: поток
+        событий прекратился при живом API. Изнутри Wazuh это состояние выглядит
+        как спокойный день.
+      </p>
+    </div>
+
+    <div class="prose">
+      <p>
+        Заявки в ServiceDesk Plus защищены от лавины: одинаковые события с
+        одного узла в течение часа дописываются комментарием к уже открытой
+        заявке. Иначе одна атака перебором создала бы сотню заявок и похоронила
+        очередь поддержки вместе со всеми остальными обращениями.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Дашборды</p>
+      <h2>Что видит дежурный</h2>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <h3>Обзор SOC</h3>
+        <p>
+          Первый экран: инциденты, требующие реагирования, поток событий по
+          уровням, узлы-источники, самые частые срабатывания, техники
+          MITRE ATT&amp;CK, отказы аутентификации по источникам.
+        </p>
+        <p>
+          Провал на графике при неизменном числе агентов означает потерю
+          событий, а не спокойный день. Тишина в SIEM — почти всегда
+          неисправность.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Инфраструктура и реагирование</h3>
+        <p>
+          Изменения файлов портала, что заблокировано автоматически, изменения
+          в Active Directory, события дисковой подсистемы, состояние резервного
+          копирования.
+        </p>
+      </div>
+      <div class="card">
+        <h3>Уязвимости</h3>
+        <p>
+          Распределение по критичности и таблица «узел — пакет — CVE».
+          Источник — инвентарь узлов, сопоставленный с базами уязвимостей.
+        </p>
+      </div>
+    </div>
+
+    <div class="prose">
+      <p>
+        Дашборды собираются генератором и хранятся в репозитории как код, а не
+        правятся в интерфейсе: файл экспорта — несколько тысяч строк JSON,
+        вложенного в JSON, где опечатка обнаруживается только при загрузке.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Развёртывание</p>
+      <h2>Порядок работ</h2>
+      <p>
+        Всё описано кодом: инвентарь, переменные, роли и плейбуки. Повторный
+        запуск на работающей системе ничего не ломает и показывает расхождения
+        конфигурации. Порядок шагов обязателен.
+      </p>
+    </div>
+
+    <div class="steps">
+      <div class="step">
+        <div class="k">00</div>
+        <div>
+          <h3>Подготовка</h3>
+          <p>Девять виртуальных машин, отдельный том под данные индексера, доступ по ключу, хранилище снапшотов, записи DNS.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="k">01</div>
+        <div>
+          <h3>Предполётная проверка</h3>
+          <p>Версия системы, память, свободное место, отдельный том, синхронизация часов. Расхождение времени ломает корреляцию: подбор пароля и последующий вход окажутся в обратном порядке.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="k">02</div>
+        <div>
+          <h3>Сертификаты</h3>
+          <p>Собственный удостоверяющий центр. Закрытые ключи остаются на управляющей машине и в репозиторий не попадают.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="k">03</div>
+        <div>
+          <h3>Кластер индексера</h3>
+          <p>Узлы поднимаются по одному, чтобы кворум не терялся. Затем загружаются учётные записи, шаблон индексов и политика хранения.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="k">04</div>
+        <div>
+          <h3>Менеджеры</h3>
+          <p>Сначала master, затем worker. Раскладываются правила, декодеры, группы агентов и скрипты реагирования, после чего прогоняются самопроверки правил.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="k">05</div>
+        <div>
+          <h3>Дашборды и балансировщики</h3>
+          <p>Импорт объектов интерфейса, настройка HAProxy и keepalived. После этого шага система доступна по постоянным адресам.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="k">06</div>
+        <div>
+          <h3>Резервирование и интеграции</h3>
+          <p>Плейбук не просто настраивает расписание — он делает проверочный снапшот и прерывается, если тот не собрался.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="k">07</div>
+        <div>
+          <h3>Агенты</h3>
+          <p>Linux — через Ansible, Windows — групповой политикой. Волнами: сначала десяток машин ИТ-отдела, затем серверы, контроллеры домена и только потом остальные рабочие станции.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="k">08</div>
+        <div>
+          <h3>Приёмка</h3>
+          <p>Одиннадцать пунктов проверки, от состояния кластера до тестового алерта, дошедшего до заявки в ServiceDesk Plus, и проведённых учений по отказоустойчивости.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="prose">
+      <p>
+        Раскатывать агенты сразу на все четыреста машин не нужно, и причина не в
+        нагрузке. Первая партия покажет, какие правила придётся настраивать под
+        конкретную инфраструктуру, и понять это лучше на десяти машинах, чем на
+        четырёхстах.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Ресурсы</p>
+      <h2>Расчёт объёмов</h2>
+    </div>
+
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Узел</th><th>Количество</th><th>vCPU</th><th>ОЗУ</th><th>Диск</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Индексер</td><td class="num">3</td><td class="num">8</td><td class="num">16 ГБ</td><td class="num">500 ГБ</td></tr>
+          <tr><td>Менеджер</td><td class="num">2</td><td class="num">8</td><td class="num">8 ГБ</td><td class="num">300 ГБ</td></tr>
+          <tr><td>Дашборд</td><td class="num">2</td><td class="num">4</td><td class="num">4 ГБ</td><td class="num">50 ГБ</td></tr>
+          <tr><td>Балансировщик</td><td class="num">2</td><td class="num">2</td><td class="num">2 ГБ</td><td class="num">30 ГБ</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>
+        При потоке около 410 событий в секунду и доле алертов в 15 процентов
+        получается порядка 6,4 ГБ данных в сутки, с репликой — 12,8 ГБ. Политика
+        жизненного цикла снимает реплики через 30 суток, сжимает индексы и
+        удаляет их через 400 — год плюс запас на то, чтобы годовая проверка
+        видела весь предыдущий год целиком.
+      </p>
+      <p>
+        Первым признаком нехватки ресурсов станет не заполнение дисков, а
+        заполнение очереди разбора событий выше 80 процентов. Это происходит
+        раньше и означает, что менеджер не успевает за потоком.
+      </p>
+      <p>
+        Если девять машин выделить нельзя, работоспособен вариант из пяти:
+        индексер и менеджер совмещаются на двух узлах, третий узел индексера
+        нужен только для кворума. Ценой становится общая нагрузка — тяжёлый
+        запрос в интерфейсе замедляет обработку событий.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Границы</p>
+      <h2>Чего это решение не делает</h2>
+      <p>
+        Сказать об этом стоит прямо, потому что ожидания от SIEM обычно шире её
+        возможностей.
+      </p>
+      <ul class="plain">
+        <li><b>Сетевой трафик не анализируется.</b> Wazuh работает с журналами узлов. Атака между двумя машинами без агентов не оставит следа. Для полноты картины нужен сетевой сенсор — это отдельная задача.</li>
+        <li><b>Реагирование ограничено намеренно.</b> Изоляция применяется только к рабочим станциям, блокировка учётных записей — только к непривилегированным и не чаще трёх раз в час.</li>
+        <li><b>Резервирование не защищает от потери площадки.</b> Все девять машин в одной сети. Конфигурации выгружаются наружу, поэтому восстановление занимает часы, но исторические события при этом теряются.</li>
+        <li><b>Правила покрывают известные системы.</b> Появление новой системы требует новых правил, иначе её события будут собираться, но не анализироваться.</li>
+        <li><b>Организационную часть платформа не заменяет.</b> Модель угроз, регламент реагирования, обучение персонала и аттестация остаются работой людей. SIEM даёт для этих документов техническую основу.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section>
+    <div class="prose section-head">
+      <p class="eyebrow">Состав</p>
+      <h2>Что лежит в репозитории</h2>
+    </div>
+
+    <div class="tw">
+      <table>
+        <thead><tr><th>Каталог</th><th>Содержимое</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">ansible/</td><td>Инвентарь, переменные, девять ролей, плейбуки развёртывания и приёмки</td></tr>
+          <tr><td class="mono">rules/</td><td>Декодеры, правила обнаружения, списки, конфигурации десяти групп агентов</td></tr>
+          <tr><td class="mono">active-response/</td><td>Скрипты реагирования для Linux и Windows</td></tr>
+          <tr><td class="mono">integrations/</td><td>ServiceDesk Plus, Telegram, Zabbix и шаблон для Zabbix</td></tr>
+          <tr><td class="mono">dashboards/</td><td>Генератор дашбордов и готовый набор объектов</td></tr>
+          <tr><td class="mono">agents/</td><td>Установщики агентов для Windows и Linux</td></tr>
+          <tr><td class="mono">backup/</td><td>Копирование и восстановление конфигураций и индексов</td></tr>
+          <tr><td class="mono">scripts/</td><td>Проверка состояния и учения по отказоустойчивости</td></tr>
+          <tr><td class="mono">docs/</td><td>Одиннадцать документов: от архитектуры до разбора неисправностей</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="prose">
+      <p>
+        Секреты в репозиторий не попадают ни в открытом, ни в зашифрованном
+        виде: пароли лежат в отдельном файле под управлением хранилища секретов
+        Ansible, закрытые ключи удостоверяющего центра — за пределами
+        репозитория.
+      </p>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <p>
+      Проект «Wazuh в сети AH Prostory» · 111 файлов ·
+      <span class="mono">github.com/IIPOCTO4EJIOBEK/Wazuh</span>
+    </p>
+    <p>
+      Версия платформы закреплена: Wazuh 4.14.7. Обновление всегда осознанное —
+      пакеты защищены от автоматического обновления, порядок работ описан в
+      документации по эксплуатации.
+    </p>
+  </footer>
+
+</div>
+</body>
+</html>
