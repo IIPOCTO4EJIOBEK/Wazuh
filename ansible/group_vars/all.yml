@@ -38,6 +38,9 @@ wazuh_agents_fqdn: "wazuh-agents.{{ wazuh_domain }}"   # VIP приёма аге
 # Виртуальные адреса keepalived
 wazuh_vip_agents: "10.5.2.90"
 wazuh_vip_dashboard: "10.5.2.91"
+# Интерфейс, на котором keepalived держит виртуальные адреса.
+# При объединении карт в bond имя меняется на bond0 — иначе адреса
+# не поднимутся. См. docs/13-network-redundancy.md
 wazuh_vrrp_interface: "eth0"
 wazuh_vrrp_id_agents: 90
 wazuh_vrrp_id_dashboard: 91
