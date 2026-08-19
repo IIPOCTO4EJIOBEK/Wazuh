@@ -149,6 +149,126 @@ Ansible.
 Порты: контроллеры домена → сборщик 5985/tcp (WinRM), сборщик →
 `wazuh-pilot` 1514/tcp и 1515/tcp.
 
+**Отдельная машина под это не обязательна.** Сборщиком событий может
+работать любой рядовой сервер домена — роль встроена в Windows и
+включается командой `wecutil qc`. Если в московской серверной есть
+сервер с запасом по диску, машину можно не заводить: экономится лицензия
+Windows Server и один узел в обслуживании. Отдельная ВМ нужна, только
+если подходящего сервера нет либо канал `ForwardedEvents` нежелательно
+смешивать с рабочей нагрузкой.
+
+---
+
+## Создание ВМ на pdc-hv0
+
+Гипервизор — Hyper-V на Windows Server 2022. Значения по умолчанию в нём
+для наших задач не годятся: ниже команды с уже учтёнными поправками.
+
+### wazuh-pilot
+
+```powershell
+$VM     = "wazuh-pilot"
+$Path   = "D:\Hyper-V"                   # том, где лежат виртуальные машины
+$ISO    = "D:\ISO\ubuntu-24.04-live-server-amd64.iso"
+$Switch = "SET-Wazuh"                    # коммутатор серверной сети
+
+New-VM -Name $VM -Generation 2 -MemoryStartupBytes 16GB `
+       -NewVHDPath "$Path\$VM\$VM-os.vhdx" -NewVHDSizeBytes 60GB `
+       -SwitchName $Switch -Path $Path
+
+# Память фиксированная. Динамическая память и куча JVM несовместимы:
+# гипервизор отбирает страницы, которые виртуальная машина считает
+# своими, и сборка мусора начинает работать с диском.
+Set-VMMemory $VM -DynamicMemoryEnabled $false -StartupBytes 16GB
+
+Set-VMProcessor $VM -Count 8
+
+# Отдельные диски под индексер и под рабочий каталог менеджера
+New-VHD -Path "$Path\$VM\$VM-indexer.vhdx" -SizeBytes 250GB -Dynamic
+New-VHD -Path "$Path\$VM\$VM-ossec.vhdx"   -SizeBytes 100GB -Dynamic
+Add-VMHardDiskDrive $VM -Path "$Path\$VM\$VM-indexer.vhdx" -ControllerType SCSI
+Add-VMHardDiskDrive $VM -Path "$Path\$VM\$VM-ossec.vhdx"   -ControllerType SCSI
+
+# Ubuntu не загрузится с шаблоном Secure Boot по умолчанию
+Set-VMFirmware $VM -SecureBootTemplate MicrosoftUEFICertificateAuthority
+
+# Автоматические контрольные точки включены по умолчанию и заметно
+# замедляют дисковые операции. Для узла с индексом это ощутимо.
+Set-VM $VM -AutomaticCheckpointsEnabled $false
+
+# Время берём с того же NTP, что и контроллеры домена. Два источника
+# времени расходятся, а расхождение ломает корреляцию событий.
+Disable-VMIntegrationService $VM -Name "Time Synchronization"
+
+# Поведение при перезагрузке гипервизора
+Set-VM $VM -AutomaticStartAction Start -AutomaticStartDelay 120 `
+           -AutomaticStopAction ShutDown
+
+Add-VMDvdDrive $VM -Path $ISO
+Set-VMFirmware $VM -FirstBootDevice (Get-VMDvdDrive $VM)
+Start-VM $VM
+```
+
+### wef-collector
+
+Если решено заводить отдельной машиной.
+
+```powershell
+$VM = "wef-collector"
+New-VM -Name $VM -Generation 2 -MemoryStartupBytes 8GB `
+       -NewVHDPath "$Path\$VM\$VM-os.vhdx" -NewVHDSizeBytes 80GB `
+       -SwitchName $Switch -Path $Path
+
+Set-VMMemory $VM -DynamicMemoryEnabled $false -StartupBytes 8GB
+Set-VMProcessor $VM -Count 4
+
+New-VHD -Path "$Path\$VM\$VM-logs.vhdx" -SizeBytes 200GB -Dynamic
+Add-VMHardDiskDrive $VM -Path "$Path\$VM\$VM-logs.vhdx" -ControllerType SCSI
+
+Set-VM $VM -AutomaticCheckpointsEnabled $false
+Set-VM $VM -AutomaticStartAction Start -AutomaticStartDelay 180
+```
+
+### Где размещать диски
+
+Требования по производительности скромные: 125 событий в секунду дают
+порядка сотни операций записи в секунду — это выдержит любой том
+массива. Отдельный класс дисков под пилот заказывать незачем.
+
+Важнее другое. **Не размещать на томе, где был сбой 09.06.2026.** Тогда
+отказал массив FUJITSU ETERNUS_DXL, ошибка пришла на
+`\Device\HarddiskVolume10`, и после восстановления том формально здоров.
+Пока причина отказа не установлена окончательно, класть на него систему,
+которая должна пережить следующий такой отказ, не стоит.
+
+### Разметка дисков в Ubuntu
+
+При установке размечается только системный диск. Остальные — после:
+
+```bash
+lsblk                                    # обычно sdb и sdc
+
+mkfs.xfs /dev/sdb                        # 250 ГБ — индексер
+mkfs.xfs /dev/sdc                        # 100 ГБ — менеджер
+mkdir -p /var/lib/wazuh-indexer /var/ossec
+
+# Монтирование по UUID, а не по имени: sdb и sdc могут поменяться
+# местами после перезагрузки, и данные окажутся не на своём месте
+blkid /dev/sdb /dev/sdc
+
+cat >> /etc/fstab <<'EOF'
+UUID=<uuid-sdb>  /var/lib/wazuh-indexer  xfs  defaults,noatime  0 2
+UUID=<uuid-sdc>  /var/ossec              xfs  defaults,noatime  0 2
+EOF
+
+mount -a
+df -h /var/lib/wazuh-indexer /var/ossec
+```
+
+`noatime` снижает лишнюю запись: индексер держит открытыми тысячи
+файлов, и обновление времени доступа у каждого — чистые накладные
+расходы.
+
 ---
 
 ## Три пути завернуть Active Directory
