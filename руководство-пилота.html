@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Пошаговое руководство по запуску пилота Wazuh: виртуальная машина, аудит на контроллерах домена, развёртывание, агенты, наблюдение и приёмка.">
+<title>Пилот Wazuh</title>
+
+<style>
+/* ==================================================================
+   Палитра та же, что у описания проекта — документы одного комплекта.
+   Добавлены роли, которых там не было: состояние шага, владелец,
+   проверка. Это рабочий документ, по нему идут сверху вниз.
+   ================================================================== */
+:root {
+  --ground:      #eef1f5;
+  --surface:     #ffffff;
+  --surface-2:   #e4e9f0;
+  --ink:         #141b24;
+  --ink-2:       #3d4855;
+  --ink-3:       #6b7787;
+  --rule:        #cdd5e0;
+  --rule-soft:   #dee4ec;
+
+  --accent:      #0d6e79;
+  --accent-ink:  #0a565f;
+  --accent-wash: #d8ebed;
+
+  --who-1:      #1f4d8f;   /* Валерий */
+  --who-1-wash: #dde7f6;
+  --who-2:      #6b3d8f;   /* Дулепов */
+  --who-2-wash: #ebe0f5;
+  --who-3:      #8f5a1f;   /* Цеховской */
+  --who-3-wash: #f6e9d8;
+  --who-4:      #1a6f4b;   /* администратор платформы */
+  --who-4-wash: #d9eee4;
+
+  --warn:      #99201d;
+  --warn-wash: #f6dedc;
+
+  --code-bg:   #1a2230;
+  --code-ink:  #dfe7f0;
+  --code-dim:  #8b9aad;
+
+  --shadow: 0 1px 2px rgba(20, 27, 36, .06), 0 8px 24px -16px rgba(20, 27, 36, .3);
+
+  --serif: Georgia, "PT Serif", "Times New Roman", serif;
+  --sans:  system-ui, -apple-system, "Segoe UI", "Noto Sans", Arial, sans-serif;
+  --mono:  ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:    #0d1319;
+    --surface:   #151d26;
+    --surface-2: #1d2733;
+    --ink:       #e6ecf3;
+    --ink-2:     #b3bfcd;
+    --ink-3:     #7d8a99;
+    --rule:      #2b3743;
+    --rule-soft: #212c37;
+
+    --accent:      #4fbcc4;
+    --accent-ink:  #7ad3d8;
+    --accent-wash: #12333a;
+
+    --who-1:      #7ba8e8;
+    --who-1-wash: #16243a;
+    --who-2:      #b58ce0;
+    --who-2-wash: #291a3a;
+    --who-3:      #d9a05c;
+    --who-3-wash: #33240f;
+    --who-4:      #4cbb8a;
+    --who-4-wash: #123328;
+
+    --warn:      #ea5a55;
+    --warn-wash: #38191c;
+
+    --code-bg:   #0a0f16;
+    --code-ink:  #d5deea;
+    --code-dim:  #6b7a8d;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px -18px rgba(0, 0, 0, .8);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:    #0d1319;
+  --surface:   #151d26;
+  --surface-2: #1d2733;
+  --ink:       #e6ecf3;
+  --ink-2:     #b3bfcd;
+  --ink-3:     #7d8a99;
+  --rule:      #2b3743;
+  --rule-soft: #212c37;
+
+  --accent:      #4fbcc4;
+  --accent-ink:  #7ad3d8;
+  --accent-wash: #12333a;
+
+  --who-1:      #7ba8e8;
+  --who-1-wash: #16243a;
+  --who-2:      #b58ce0;
+  --who-2-wash: #291a3a;
+  --who-3:      #d9a05c;
+  --who-3-wash: #33240f;
+  --who-4:      #4cbb8a;
+  --who-4-wash: #123328;
+
+  --warn:      #ea5a55;
+  --warn-wash: #38191c;
+
+  --code-bg:   #0a0f16;
+  --code-ink:  #d5deea;
+  --code-dim:  #6b7a8d;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px -18px rgba(0, 0, 0, .8);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.page { max-width: 940px; margin: 0 auto; padding: 0 24px 96px; }
+
+h1, h2, h3, h4 { font-family: var(--serif); font-weight: 700; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(29px, 5vw, 44px); line-height: 1.14; letter-spacing: -.015em; }
+h2 { font-size: clamp(21px, 3vw, 27px); line-height: 1.25; }
+h3 { font-size: 17px; line-height: 1.35; }
+h4 { font-size: 15px; font-family: var(--sans); font-weight: 700; }
+
+p { margin: 0 0 .9em; color: var(--ink-2); }
+p:last-child { margin-bottom: 0; }
+p strong { color: var(--ink); font-weight: 600; }
+a { color: var(--accent-ink); text-underline-offset: 2px; }
+a:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: .87em;
+  background: var(--surface-2);
+  padding: .1em .38em;
+  border-radius: 4px;
+  color: var(--ink);
+}
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  margin: 0 0 10px;
+}
+
+/* ================= Шапка ================= */
+.masthead { padding: 64px 0 36px; border-bottom: 1px solid var(--rule); }
+.masthead h1 { margin-bottom: 16px; }
+.lede { font-size: 18px; line-height: 1.55; color: var(--ink-2); max-width: 62ch; margin: 0; }
+
+/* ================= Расписание ================= */
+.schedule {
+  margin: 34px 0 0;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 20px 22px;
+  box-shadow: var(--shadow);
+  overflow-x: auto;
+}
+.schedule h4 { margin-bottom: 14px; color: var(--ink); }
+.sched-grid { display: grid; grid-template-columns: 168px repeat(6, minmax(46px, 1fr)); gap: 6px 4px; min-width: 560px; align-items: center; }
+.sched-head { font-size: 11px; color: var(--ink-3); text-align: center; letter-spacing: .04em; }
+.sched-label { font-size: 13.5px; color: var(--ink-2); padding-right: 8px; }
+.sched-bar { height: 22px; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #fff; }
+.b1 { background: var(--who-1); }
+.b2 { background: var(--who-2); }
+.b4 { background: var(--who-4); }
+.b5 { background: var(--accent); }
+.sched-note { font-size: 13px; color: var(--ink-3); margin-top: 14px; }
+
+/* ================= Шаги ================= */
+.steps { margin: 44px 0 0; }
+
+.step {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 0 22px;
+  position: relative;
+  padding-bottom: 40px;
+}
+/* Линия, связывающая шаги */
+.step::before {
+  content: "";
+  position: absolute;
+  left: 27px;
+  top: 52px;
+  bottom: 0;
+  width: 2px;
+  background: var(--rule);
+}
+.step:last-child::before { display: none; }
+
+.step-num {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  color: var(--accent-ink);
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 1;
+}
+
+.step-body {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 22px 24px;
+  box-shadow: var(--shadow);
+  min-width: 0;
+}
+.step-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 6px; }
+.step-head h2 { flex: 1 1 auto; min-width: 220px; }
+
+.chip {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.who1 { background: var(--who-1-wash); color: var(--who-1); }
+.who2 { background: var(--who-2-wash); color: var(--who-2); }
+.who3 { background: var(--who-3-wash); color: var(--who-3); }
+.who4 { background: var(--who-4-wash); color: var(--who-4); }
+.dur  { background: var(--surface-2); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+.step-body > * + * { margin-top: 16px; }
+.step-body h4 { margin-bottom: 8px; }
+
+/* ================= Команды ================= */
+pre {
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: 8px;
+  padding: 15px 17px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.62;
+  margin: 0;
+  border: 1px solid var(--rule);
+}
+pre .c { color: var(--code-dim); }
+pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+
+/* ================= Чек-листы ================= */
+ul.check { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 9px; }
+ul.check li { padding-left: 28px; position: relative; font-size: 14.5px; color: var(--ink-2); }
+ul.check li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: .28em;
+  width: 15px;
+  height: 15px;
+  border: 1.5px solid var(--rule);
+  border-radius: 3px;
+  background: var(--surface-2);
+}
+ul.check li b { color: var(--ink); font-weight: 600; }
+
+ul.plain { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+ul.plain li { padding-left: 18px; position: relative; font-size: 14.5px; color: var(--ink-2); }
+ul.plain li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: .62em;
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+ul.plain li b { color: var(--ink); font-weight: 600; }
+
+/* ================= Врезки ================= */
+.verify {
+  border: 1px solid var(--accent);
+  background: var(--accent-wash);
+  border-radius: 8px;
+  padding: 14px 18px;
+}
+.verify h4 { color: var(--accent-ink); margin-bottom: 6px; }
+.verify p, .verify li { font-size: 14px; }
+
+.warn {
+  border-left: 3px solid var(--warn);
+  background: var(--warn-wash);
+  border-radius: 0 8px 8px 0;
+  padding: 14px 18px;
+}
+.warn h4 { color: var(--warn); margin-bottom: 6px; }
+.warn p { font-size: 14px; }
+
+/* ================= Таблицы ================= */
+.tw { overflow-x: auto; border: 1px solid var(--rule); border-radius: 9px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 460px; }
+th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+thead th {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+tbody tr:last-child td { border-bottom: 0; }
+td { color: var(--ink-2); }
+td:first-child { color: var(--ink); font-weight: 500; }
+td.n { font-variant-numeric: tabular-nums; }
+
+/* ================= Секции вне шагов ================= */
+section { padding-top: 44px; }
+section > h2 { margin-bottom: 14px; }
+section > * + * { margin-top: 18px; }
+.prose { max-width: 68ch; }
+
+.foot { margin-top: 56px; padding-top: 26px; border-top: 1px solid var(--rule); font-size: 13.5px; color: var(--ink-3); }
+.foot p { color: var(--ink-3); font-size: 13.5px; }
+
+@media (max-width: 640px) {
+  .page { padding: 0 16px 72px; }
+  .step { grid-template-columns: 40px 1fr; gap: 0 14px; }
+  .step::before { left: 19px; top: 44px; }
+  .step-num { width: 40px; height: 40px; font-size: 18px; }
+  .step-body { padding: 18px 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="masthead">
+  <p class="eyebrow">Руководство по внедрению</p>
+  <h1>Пилот Wazuh</h1>
+  <p class="lede">
+    Пошаговый порядок запуска: от создания виртуальной машины до приёмки.
+    Пилот в одноузловой конфигурации, источники — Active Directory и
+    Bitrix. От первой команды до работающей системы — один рабочий день,
+    затем две недели наблюдения.
+  </p>
+
+  <div class="schedule">
+    <h4>Как это ложится по времени</h4>
+    <div class="sched-grid">
+      <div></div>
+      <div class="sched-head">День 1</div>
+      <div class="sched-head">День 2</div>
+      <div class="sched-head">Нед. 1</div>
+      <div class="sched-head">Нед. 2</div>
+      <div class="sched-head">Нед. 3</div>
+      <div class="sched-head">→</div>
+
+      <div class="sched-label">1. Виртуальная машина</div>
+      <div class="sched-bar b1">1–2 ч</div>
+      <div></div><div></div><div></div><div></div><div></div>
+
+      <div class="sched-label">2. Аудит на контроллерах</div>
+      <div class="sched-bar b2">30 мин</div>
+      <div></div><div></div><div></div><div></div><div></div>
+
+      <div class="sched-label">3. Развёртывание платформы</div>
+      <div></div>
+      <div class="sched-bar b4">40 мин</div>
+      <div></div><div></div><div></div><div></div>
+
+      <div class="sched-label">4. Агенты</div>
+      <div></div>
+      <div class="sched-bar b4">30 мин</div>
+      <div></div><div></div><div></div><div></div>
+
+      <div class="sched-label">5. Наблюдение и настройка</div>
+      <div></div><div></div>
+      <div class="sched-bar b5">снятие ложных</div>
+      <div class="sched-bar b5">замер</div>
+      <div></div><div></div>
+
+      <div class="sched-label">Приёмка и решение</div>
+      <div></div><div></div><div></div><div></div>
+      <div class="sched-bar b5">итоги</div>
+      <div></div>
+    </div>
+    <p class="sched-note">
+      Шаги 1 и 2 идут параллельно: включение аудита не зависит от
+      готовности машины, и начинать его стоит сразу — без него событий
+      просто не будет, чем бы их ни собирали.
+    </p>
+  </div>
+</header>
+
+<div class="steps">
+
+  <!-- ============================ ШАГ 1 ============================ -->
+  <div class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <div class="step-head">
+        <h2>Виртуальная машина</h2>
+        <span class="chip who1">Валерий</span>
+        <span class="chip dur">1–2 ч</span>
+      </div>
+      <p>
+        Одна машина на pdc-hv0. Вторая (сборщик событий Windows) при
+        выбранном способе подключения Active Directory не нужна.
+      </p>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Параметр</th><th>Значение</th><th>Почему так</th></tr></thead>
+          <tbody>
+            <tr><td>ОС</td><td>Ubuntu Server 24.04 LTS</td><td>минимальная установка, без графики</td></tr>
+            <tr><td>vCPU</td><td class="n">8</td><td>разбор событий правилами упирается в процессор</td></tr>
+            <tr><td>ОЗУ</td><td class="n">16 ГБ</td><td>фиксированная, не динамическая</td></tr>
+            <tr><td>Диск 1</td><td class="n">60 ГБ</td><td><code>/</code> — система</td></tr>
+            <tr><td>Диск 2</td><td class="n">250 ГБ</td><td><code>/var/lib/wazuh-indexer</code></td></tr>
+            <tr><td>Диск 3</td><td class="n">100 ГБ</td><td><code>/var/ossec</code></td></tr>
+            <tr><td>Сеть</td><td>1 vNIC, статика</td><td>серверная Москвы</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="warn">
+        <h4>Три отдельных диска, а не один на 410 ГБ</h4>
+        <p>
+          Переполнение индексами на корневом томе останавливает всю
+          операционную систему, а не только поиск. Каталог менеджера
+          отдельно, потому что туда пишется буфер, когда индексер
+          недоступен. Предполётная проверка откажется ставить систему,
+          если тома совмещены, — и это сделано намеренно.
+        </p>
+      </div>
+
+      <h4>Создание на Hyper-V</h4>
+<pre><code>$VM     = "wazuh-pilot"
+$Path   = "D:\Hyper-V"
+$ISO    = "D:\ISO\ubuntu-24.04-live-server-amd64.iso"
+$Switch = "SET-Wazuh"
+
+New-VM -Name $VM -Generation 2 -MemoryStartupBytes 16GB `
+       -NewVHDPath "$Path\$VM\$VM-os.vhdx" -NewVHDSizeBytes 60GB `
+       -SwitchName $Switch -Path $Path
+
+<span class="c"># Динамическая память и куча JVM несовместимы: гипервизор отбирает
+# страницы, которые машина считает своими, и сборка мусора уходит в диск</span>
+Set-VMMemory $VM -DynamicMemoryEnabled $false -StartupBytes 16GB
+Set-VMProcessor $VM -Count 8
+
+New-VHD -Path "$Path\$VM\$VM-indexer.vhdx" -SizeBytes 250GB -Dynamic
+New-VHD -Path "$Path\$VM\$VM-ossec.vhdx"   -SizeBytes 100GB -Dynamic
+Add-VMHardDiskDrive $VM -Path "$Path\$VM\$VM-indexer.vhdx" -ControllerType SCSI
+Add-VMHardDiskDrive $VM -Path "$Path\$VM\$VM-ossec.vhdx"   -ControllerType SCSI
+
+<span class="c"># Без этого шаблона Ubuntu не загрузится</span>
+Set-VMFirmware $VM -SecureBootTemplate MicrosoftUEFICertificateAuthority
+
+<span class="c"># Автоматические контрольные точки включены по умолчанию
+# и заметно замедляют диск</span>
+Set-VM $VM -AutomaticCheckpointsEnabled $false
+
+<span class="c"># Время — только с NTP домена. Два источника расходятся,
+# а расхождение ломает корреляцию событий</span>
+Disable-VMIntegrationService $VM -Name "Time Synchronization"
+
+Set-VM $VM -AutomaticStartAction Start -AutomaticStartDelay 120 `
+           -AutomaticStopAction ShutDown
+
+Add-VMDvdDrive $VM -Path $ISO
+Set-VMFirmware $VM -FirstBootDevice (Get-VMDvdDrive $VM)
+Start-VM $VM</code></pre>
+
+      <h4>Разметка дисков после установки ОС</h4>
+<pre><code>lsblk                          <span class="c"># обычно sdb и sdc</span>
+
+mkfs.xfs /dev/sdb              <span class="c"># 250 ГБ — индексер</span>
+mkfs.xfs /dev/sdc              <span class="c"># 100 ГБ — менеджер</span>
+mkdir -p /var/lib/wazuh-indexer /var/ossec
+
+<span class="c"># Монтировать по UUID, а не по имени: sdb и sdc меняются
+# местами после перезагрузки, и данные окажутся не на своём месте</span>
+blkid /dev/sdb /dev/sdc
+
+cat &gt;&gt; /etc/fstab &lt;&lt;'EOF'
+UUID=&lt;uuid-sdb&gt;  /var/lib/wazuh-indexer  xfs  defaults,noatime  0 2
+UUID=&lt;uuid-sdc&gt;  /var/ossec              xfs  defaults,noatime  0 2
+EOF
+
+mount -a
+df -h /var/lib/wazuh-indexer /var/ossec</code></pre>
+
+      <h4>Перед передачей</h4>
+      <ul class="check">
+        <li>Три тома смонтированы, записи в <code>/etc/fstab</code> есть</li>
+        <li>Статический адрес, шлюз и DNS настроены, имя узла <b>wazuh-pilot</b></li>
+        <li>Время синхронизировано: <code>timedatectl show -p NTPSynchronized</code> отдаёт <code>yes</code></li>
+        <li><code>apt update &amp;&amp; apt upgrade</code> выполнены</li>
+        <li>Учётная запись <b>ansible</b> создана, ключ добавлен, <code>sudo</code> без пароля</li>
+        <li>Снимок состояния сделан — откат перед повторной установкой</li>
+        <li>Порты открыты: 514/tcp с сетей контроллеров домена и Bitrix; 443 и 22 с рабочих мест ИТ; наружу 443 и 10051 на Zabbix</li>
+      </ul>
+
+      <div class="verify">
+        <h4>Шаг выполнен, если</h4>
+        <p>
+          С управляющей машины проходит <code>ssh ansible@&lt;адрес&gt; sudo -n true</code>
+          без запроса пароля, а <code>df -h</code> показывает три отдельных
+          тома. Фактический адрес машины сообщить — он вписывается в
+          инвентарь пилота.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ ШАГ 2 ============================ -->
+  <div class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <div class="step-head">
+        <h2>Расширенный аудит на контроллерах домена</h2>
+        <span class="chip who2">Дулепов</span>
+        <span class="chip dur">30 мин</span>
+      </div>
+      <p>
+        Идёт параллельно с первым шагом и машины не ждёт. Без этих
+        политик события <b>4688</b>, <b>4769</b> и <b>4104</b> не
+        создаются вовсе — собирать будет нечего, каким бы способом
+        события ни доставлялись.
+      </p>
+
+      <h4>Групповая политика: расширенный аудит</h4>
+      <p>
+        Конфигурация компьютера → Политики → Конфигурация Windows →
+        Параметры безопасности → Расширенная настройка политики аудита.
+      </p>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th>Категория</th><th>Подкатегория</th><th>Режим</th></tr></thead>
+          <tbody>
+            <tr><td>Вход в систему</td><td>Вход, выход, блокировка учётной записи, специальный вход</td><td>успех и отказ</td></tr>
+            <tr><td>Управление учётными записями</td><td>Учётные записи пользователей, группы безопасности</td><td>успех и отказ</td></tr>
+            <tr><td>Подробное отслеживание</td><td>Создание процесса</td><td>успех</td></tr>
+            <tr><td>Доступ к службе каталогов</td><td>Доступ и изменения службы каталогов</td><td>успех и отказ</td></tr>
+            <tr><td>Отслеживание политик</td><td>Изменение политики аудита</td><td>успех и отказ</td></tr>
+            <tr><td>Доступ к объектам</td><td>Доступ к объектам ядра</td><td>успех и отказ</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Командная строка в событии 4688</h4>
+      <p>
+        Без неё видно имя процесса, но не аргументы. Правила на
+        обфусцированный PowerShell и на удаление теневых копий
+        (<code>vssadmin delete shadows</code>) без этого бесполезны.
+      </p>
+      <ul class="plain">
+        <li>Административные шаблоны → Система → <b>Аудит создания процессов</b> → «Включать командную строку в события создания процессов» = <b>Включено</b></li>
+      </ul>
+
+      <h4>Запись блоков PowerShell</h4>
+      <ul class="plain">
+        <li>Административные шаблоны → Компоненты Windows → Windows PowerShell → <b>Включить регистрацию блоков сценариев</b> = Включено</li>
+        <li>Там же → <b>Включить регистрацию модулей</b> = Включено</li>
+      </ul>
+
+      <div class="verify">
+        <h4>Шаг выполнен, если</h4>
+<pre><code>gpupdate /force
+
+<span class="c"># Категории аудита включены</span>
+auditpol /get /category:* | findstr /i "Process Logon Account Directory"
+
+<span class="c"># Командная строка попадает в событие</span>
+Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit' `
+  -Name ProcessCreationIncludeCmdLine_Enabled
+
+<span class="c"># Блоки PowerShell пишутся: должны появиться события 4104</span>
+Get-WinEvent -LogName 'Microsoft-Windows-PowerShell/Operational' -MaxEvents 5 |
+  Where-Object Id -eq 4104</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ ШАГ 3 ============================ -->
+  <div class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <div class="step-head">
+        <h2>Развёртывание платформы</h2>
+        <span class="chip who4">Администратор платформы</span>
+        <span class="chip dur">40 мин</span>
+      </div>
+      <p>
+        Всё ставится Ansible. Руками на машину заходить не нужно —
+        и не нужно ничего доустанавливать.
+      </p>
+
+      <h4>Подготовка управляющей машины</h4>
+<pre><code>sudo apt install ansible python3-pip
+pip3 install passlib bcrypt        <span class="c"># без них не соберутся хеши паролей</span>
+ansible-galaxy collection install community.general community.crypto ansible.posix
+
+git clone https://github.com/IIPOCTO4EJIOBEK/Wazuh.git
+cd Wazuh/ansible</code></pre>
+
+      <h4>Секреты</h4>
+<pre><code>cp group_vars/vault.yml.example group_vars/vault.yml
+
+<span class="c"># Ключ кластера — ровно 32 символа</span>
+openssl rand -hex 16
+<span class="c"># Пароли — по одному на каждую учётную запись из файла.
+# Символы " ' \ $ ` не использовать: ломают Java-конфиги</span>
+openssl rand -base64 18 | tr -d '/+=' | head -c 16; echo
+
+$EDITOR group_vars/vault.yml
+ansible-vault encrypt group_vars/vault.yml</code></pre>
+
+      <h4>Адрес машины и установка</h4>
+<pre><code>$EDITOR inventory/pilot/hosts.yml   <span class="c"># вписать выданный адрес</span>
+
+<span class="c"># Проверка до установки: ОС, память, отдельные тома, время</span>
+ansible-playbook -i inventory/pilot/hosts.yml site.yml \
+                 --tags preflight --ask-vault-pass
+
+<span class="c"># Установка целиком</span>
+ansible-playbook -i inventory/pilot/hosts.yml site.yml --ask-vault-pass</code></pre>
+
+      <div class="warn">
+        <h4>Инвентарь пилота — отдельный</h4>
+        <p>
+          <code>-i inventory/pilot/hosts.yml</code> обязателен в каждой
+          команде. У пилота свои параметры: один шард, ноль реплик,
+          хранение 90 суток, включённый приём syslog. Запуск с боевым
+          инвентарём поставит другую конфигурацию.
+        </p>
+      </div>
+
+      <div class="verify">
+        <h4>Шаг выполнен, если</h4>
+<pre><code><span class="c"># Кластер отвечает, статус green (одному узлу реплики не нужны)</span>
+curl -k -u admin:ПАРОЛЬ https://&lt;адрес&gt;:9200/_cluster/health?pretty
+
+<span class="c"># Службы менеджера запущены</span>
+ssh ansible@&lt;адрес&gt; sudo /var/ossec/bin/wazuh-control status
+
+<span class="c"># Интерфейс открывается</span>
+<span class="c"># https://&lt;адрес&gt; — вход под admin</span></code></pre>
+        <p>
+          Самопроверка правил проходит внутри установки: если хоть одно
+          собственное правило не сработало на образце события, play
+          прервётся. Молчащее правило внешне неотличимо от правила, для
+          которого не было событий, — поэтому проверка встроена.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ ШАГ 4 ============================ -->
+  <div class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <div class="step-head">
+        <h2>Агенты: два контроллера домена и три узла Bitrix</h2>
+        <span class="chip who2">Дулепов</span>
+        <span class="chip who3">Цеховской</span>
+        <span class="chip who4">Администратор</span>
+        <span class="chip dur">30 мин</span>
+      </div>
+
+      <h4>Узлы Bitrix — одной командой</h4>
+<pre><code>ansible-playbook -i inventory/pilot/hosts.yml \
+                 playbooks/agents-linux.yml --ask-vault-pass</code></pre>
+      <p>
+        Агент читает журналы nginx и приложения заявок локально и
+        дополнительно следит за каталогом <code>/home/bitrix/www</code>.
+        Настраивать пересылку журналов не нужно — агент делает больше
+        при меньшем объёме работы.
+      </p>
+
+      <h4>Контроллеры домена</h4>
+<pre><code><span class="c"># На каждом контроллере, от имени администратора</span>
+.\Install-WazuhAgent.ps1 -Manager &lt;адрес пилота&gt; `
+                         -Group 'default,windows,dc' `
+                         -RegistrationPassword '&lt;пароль регистрации&gt;'</code></pre>
+
+      <div class="warn">
+        <h4>Параметр <code>-Manager</code> обязателен</h4>
+        <p>
+          По умолчанию скрипт направляет агент на виртуальный адрес
+          отказоустойчивой схемы, которого в пилоте нет. Без явного
+          указания адреса агент установится и не подключится.
+        </p>
+      </div>
+
+      <div class="verify">
+        <h4>Шаг выполнен, если</h4>
+<pre><code><span class="c"># Пять агентов на связи</span>
+ssh ansible@&lt;адрес&gt; sudo /var/ossec/bin/agent_control -l
+
+<span class="c"># Проверка обнаружения: неверный пароль на контроллере домена</span>
+<span class="c"># должен поднять правило 100300, а следом 100301 при повторах</span>
+
+<span class="c"># Проверка целостности: новый файл в каталоге портала
+# должен поднять правило 100202</span>
+ssh web01 'sudo touch /home/bitrix/www/проверка-fim.php'
+<span class="c"># и убрать за собой</span>
+ssh web01 'sudo rm /home/bitrix/www/проверка-fim.php'</code></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ ШАГ 5 ============================ -->
+  <div class="step">
+    <div class="step-num">5</div>
+    <div class="step-body">
+      <div class="step-head">
+        <h2>Наблюдение: две недели</h2>
+        <span class="chip who4">Администратор платформы</span>
+        <span class="chip dur">2 недели</span>
+      </div>
+      <p>
+        Первая неделя уходит на снятие ложных срабатываний, вторая — на
+        замер фактического потока. Это и есть содержание пилота;
+        установка была подготовкой к нему.
+      </p>
+
+      <h4>Неделя первая: ложные срабатывания</h4>
+      <p>
+        Каждый день смотреть верхние строки дашборда «AH Prostory — обзор
+        SOC». Правило, которое держится в верхней строке несколько дней
+        подряд, — кандидат либо на настройку, либо на устранение причины.
+      </p>
+<pre><code><span class="c"># Что срабатывает чаще всего</span>
+curl -sk -u admin -H 'Content-Type: application/json' \
+  'https://&lt;адрес&gt;:9200/wazuh-alerts-*/_search' -d '{
+  "size": 0,
+  "query": {"range": {"timestamp": {"gte": "now-24h"}}},
+  "aggs": {"правила": {"terms": {"field": "rule.id", "size": 20}}}
+}'</code></pre>
+
+      <p>
+        Снимается срабатывание не удалением правила, а исключением
+        конкретного случая. Файл <code>rules/ahp_tuning.xml</code>,
+        уровень 0 означает «не поднимать тревогу»:
+      </p>
+<pre><code>&lt;group name="ahp,ahp_tuning,"&gt;
+  &lt;!-- Служебная задача обходит каталог портала по расписанию --&gt;
+  &lt;rule id="100901" level="0"&gt;
+    &lt;if_sid&gt;100201&lt;/if_sid&gt;
+    &lt;field name="syscheck.path" type="pcre2"&gt;^/home/bitrix/www/bitrix/tmp/&lt;/field&gt;
+    &lt;description&gt;Служебный каталог: изменения ожидаемы&lt;/description&gt;
+  &lt;/rule&gt;
+&lt;/group&gt;</code></pre>
+<pre><code><span class="c"># Раскатать и проверить</span>
+ansible-playbook -i inventory/pilot/hosts.yml site.yml \
+                 --tags content --ask-vault-pass</code></pre>
+
+      <div class="warn">
+        <h4>Исключение должно быть узким</h4>
+        <p>
+          Правило с уровнем 0 на весь каталог портала снимет и настоящую
+          подмену кода. Исключается конкретный путь, конкретная учётная
+          запись, конкретная задача — и с комментарием, почему.
+        </p>
+      </div>
+
+      <h4>Неделя вторая: замер потока</h4>
+      <p>
+        Главный измеримый результат пилота. Расчёт в документации сделан
+        по типовым значениям; фактические числа позволят заказать железо
+        под отказоустойчивую схему точно, а не с запасом вслепую.
+      </p>
+<pre><code><span class="c"># Событий в сутки — по дням, за две недели</span>
+curl -sk -u admin -H 'Content-Type: application/json' \
+  'https://&lt;адрес&gt;:9200/wazuh-alerts-*/_search' -d '{
+  "size": 0,
+  "query": {"range": {"timestamp": {"gte": "now-14d"}}},
+  "aggs": {"по_дням": {"date_histogram":
+    {"field": "timestamp", "calendar_interval": "day"}}}
+}'
+
+<span class="c"># Объём индексов: сколько места занимает сутки</span>
+curl -sk -u admin \
+  'https://&lt;адрес&gt;:9200/_cat/indices/wazuh-alerts-*?v&amp;h=index,docs.count,store.size&amp;s=index'
+
+<span class="c"># Поток на менеджере: обработано и отброшено</span>
+ssh ansible@&lt;адрес&gt; sudo cat /var/ossec/var/run/wazuh-analysisd.state</code></pre>
+
+      <div class="verify">
+        <h4>Что записать по итогам</h4>
+        <ul class="check">
+          <li>Событий в секунду: среднее и пиковое</li>
+          <li>Объём индексов в сутки, в гигабайтах</li>
+          <li>Доля событий, ставших алертами</li>
+          <li>Значение <code>events_dropped</code> — должно оставаться нулём</li>
+          <li>Заполнение очереди разбора — должно быть заметно ниже 0.8</li>
+          <li>Список снятых ложных срабатываний с причинами</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ============================ ПРИЁМКА ============================ -->
+<section>
+  <h2>Приёмка пилота</h2>
+  <div class="prose">
+    <p>
+      Проверяется не «установилось ли», а «работает ли как задумано».
+    </p>
+  </div>
+  <ul class="check">
+    <li>Интерфейс открывается, вход выполняется</li>
+    <li>События с обоих контроллеров домена доходят и разбираются</li>
+    <li>События со всех узлов Bitrix доходят и разбираются</li>
+    <li>Неверный пароль на контроллере домена поднимает алерт</li>
+    <li>Новый файл в каталоге портала поднимает правило <b>100202</b></li>
+    <li>Дашборды показывают данные, а не пустые панели</li>
+    <li>Метрики платформы приходят в Zabbix</li>
+    <li>Ежедневная копия конфигурации создаётся</li>
+    <li>Замерены фактический поток и суточный объём</li>
+    <li>Ложные срабатывания сняты, исключения описаны в репозитории</li>
+  </ul>
+</section>
+
+<!-- ============================ ПОСЛЕ ============================ -->
+<section>
+  <h2>Что дальше</h2>
+  <div class="prose">
+    <p>
+      Пилот не выбрасывается. Правила, снятые ложные срабатывания,
+      дашборды и настройки переезжают в отказоустойчивую схему без
+      изменений — они лежат в репозитории, а не в машине.
+    </p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead><tr><th>Что</th><th>Как переезжает</th></tr></thead>
+      <tbody>
+        <tr><td>Правила, декодеры, исключения</td><td>без изменений</td></tr>
+        <tr><td>Дашборды</td><td>без изменений</td></tr>
+        <tr><td>Агенты</td><td>перерегистрация на новый адрес</td></tr>
+        <tr><td>Сама машина пилота</td><td>становится узлом схемы либо остаётся стендом</td></tr>
+        <tr><td>Исторические события</td><td>снапшотом, если нужны</td></tr>
+        <tr><td>Срок хранения</td><td>меняется с 90 суток на 400</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="prose">
+    <p>
+      Решение о переходе принимается по итогам замера: фактический поток
+      покажет, хватит ли расчётных объёмов или их надо пересматривать.
+      Схема отказоустойчивого варианта и разнос по площадкам описаны в
+      документации проекта.
+    </p>
+  </div>
+</section>
+
+<!-- ============================ РИСКИ ============================ -->
+<section>
+  <h2>Что принимается сознательно</h2>
+  <div class="tw">
+    <table>
+      <thead><tr><th>Риск</th><th>Следствие</th><th>Чем закрывается на пилоте</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Одна машина</td>
+          <td>её отказ останавливает сбор, события за простой теряются</td>
+          <td>снимок ВМ, ежедневная копия конфигурации, ограниченный срок пилота</td>
+        </tr>
+        <tr>
+          <td>Нет хранилища снапшотов</td>
+          <td>потеря машины уносит историю событий</td>
+          <td>на пилоте история не ценна</td>
+        </tr>
+        <tr>
+          <td>Заявки в ServiceDesk отключены</td>
+          <td>инциденты не попадают в учёт</td>
+          <td>включаются после недели снятия ложных срабатываний</td>
+        </tr>
+        <tr>
+          <td>Syslog без шифрования</td>
+          <td>события идут по сети открытым текстом</td>
+          <td>внутренняя сеть; для боевой схемы предусмотреть туннель</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="foot">
+  <p>
+    Пилот Wazuh · AH Prostory · подробная документация:
+    <span style="font-family: var(--mono)">github.com/IIPOCTO4EJIOBEK/Wazuh</span>
+  </p>
+  <p>
+    Ответственные: виртуальные машины — Валерий; Active Directory —
+    Дулепов; Bitrix — Цеховской В.; платформа и правила — администратор
+    платформы.
+  </p>
+</footer>
+
+</div>
+</body>
+</html>
