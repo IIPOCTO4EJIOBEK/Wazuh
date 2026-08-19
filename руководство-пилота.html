@@ -465,64 +465,51 @@ section > * + * { margin-top: 18px; }
         </p>
       </div>
 
-      <h4>Создание на Hyper-V</h4>
-<pre><code>$VM     = "wazuh-pilot"
-$Path   = "D:\Hyper-V"
-$ISO    = "D:\ISO\ubuntu-24.04-live-server-amd64.iso"
-$Switch = "SET-Wazuh"
+      <h4>Создание на Hyper-V — одной командой</h4>
+      <p>
+        Скрипт снимает четыре настройки Hyper-V по умолчанию, которые
+        здесь мешают: динамическую память, шаблон Secure Boot,
+        автоматические контрольные точки и синхронизацию времени от
+        гипервизора. Каждая пояснена в самом скрипте.
+      </p>
+<pre><code><span class="c"># На pdc-hv0, в консоли от администратора</span>
+.\New-WazuhPilotVM.ps1 -SwitchName "SET-Wazuh" `
+                       -Path       "D:\Hyper-V" `
+                       -IsoPath    "D:\ISO\ubuntu-24.04-live-server-amd64.iso" `
+                       -StartAfterCreate
 
-New-VM -Name $VM -Generation 2 -MemoryStartupBytes 16GB `
-       -NewVHDPath "$Path\$VM\$VM-os.vhdx" -NewVHDSizeBytes 60GB `
-       -SwitchName $Switch -Path $Path
+<span class="c"># Той же командой создаются узлы отказоустойчивой схемы,
+# отличаются только объёмы:</span>
+.\New-WazuhPilotVM.ps1 -Name wazuh-idx-01 -IndexerDiskGB 1024 `
+                       -SwitchName "SET-Wazuh" -Path "D:\Hyper-V" `
+                       -IsoPath "D:\ISO\ubuntu-24.04-live-server-amd64.iso"</code></pre>
+      <p>
+        Скрипт проверяет наличие коммутатора, образа и места на томе, а
+        если машина с таким именем уже есть — ничего не пересоздаёт.
+      </p>
 
-<span class="c"># Динамическая память и куча JVM несовместимы: гипервизор отбирает
-# страницы, которые машина считает своими, и сборка мусора уходит в диск</span>
-Set-VMMemory $VM -DynamicMemoryEnabled $false -StartupBytes 16GB
-Set-VMProcessor $VM -Count 8
+      <h4>Подготовка ОС — одной командой</h4>
+      <p>
+        Скрипт делает всё, что должно быть готово до Ansible: размечает
+        и монтирует тома <b>по UUID</b>, ставит имя узла, настраивает
+        время, заводит учётную запись с ключом и sudo без пароля,
+        обновляет пакеты. Повторный запуск ничего не ломает и диски не
+        переразмечает.
+      </p>
+<pre><code><span class="c"># Скопировать на машину и запустить от root</span>
+scp scripts/pilot/prepare-ubuntu-node.sh root@&lt;адрес&gt;:/tmp/
+ssh root@&lt;адрес&gt;
 
-New-VHD -Path "$Path\$VM\$VM-indexer.vhdx" -SizeBytes 250GB -Dynamic
-New-VHD -Path "$Path\$VM\$VM-ossec.vhdx"   -SizeBytes 100GB -Dynamic
-Add-VMHardDiskDrive $VM -Path "$Path\$VM\$VM-indexer.vhdx" -ControllerType SCSI
-Add-VMHardDiskDrive $VM -Path "$Path\$VM\$VM-ossec.vhdx"   -ControllerType SCSI
+chmod +x /tmp/prepare-ubuntu-node.sh
+/tmp/prepare-ubuntu-node.sh     --indexer-disk /dev/sdb     --ossec-disk   /dev/sdc     --ssh-key      "$(cat ~/.ssh/id_ed25519.pub)"     --hostname     wazuh-pilot     --ntp          &lt;адрес NTP домена&gt;</code></pre>
+      <p>
+        Диски смотреть командой <code>lsblk</code>. Форматирование
+        необратимо, поэтому скрипт отказывается трогать диск, на котором
+        уже есть файловая система или разделы, и никогда не трогает
+        системный. Осознанная переразметка — ключом <code>--force</code>.
+      </p>
 
-<span class="c"># Без этого шаблона Ubuntu не загрузится</span>
-Set-VMFirmware $VM -SecureBootTemplate MicrosoftUEFICertificateAuthority
-
-<span class="c"># Автоматические контрольные точки включены по умолчанию
-# и заметно замедляют диск</span>
-Set-VM $VM -AutomaticCheckpointsEnabled $false
-
-<span class="c"># Время — только с NTP домена. Два источника расходятся,
-# а расхождение ломает корреляцию событий</span>
-Disable-VMIntegrationService $VM -Name "Time Synchronization"
-
-Set-VM $VM -AutomaticStartAction Start -AutomaticStartDelay 120 `
-           -AutomaticStopAction ShutDown
-
-Add-VMDvdDrive $VM -Path $ISO
-Set-VMFirmware $VM -FirstBootDevice (Get-VMDvdDrive $VM)
-Start-VM $VM</code></pre>
-
-      <h4>Разметка дисков после установки ОС</h4>
-<pre><code>lsblk                          <span class="c"># обычно sdb и sdc</span>
-
-mkfs.xfs /dev/sdb              <span class="c"># 250 ГБ — индексер</span>
-mkfs.xfs /dev/sdc              <span class="c"># 100 ГБ — менеджер</span>
-mkdir -p /var/lib/wazuh-indexer /var/ossec
-
-<span class="c"># Монтировать по UUID, а не по имени: sdb и sdc меняются
-# местами после перезагрузки, и данные окажутся не на своём месте</span>
-blkid /dev/sdb /dev/sdc
-
-cat &gt;&gt; /etc/fstab &lt;&lt;'EOF'
-UUID=&lt;uuid-sdb&gt;  /var/lib/wazuh-indexer  xfs  defaults,noatime  0 2
-UUID=&lt;uuid-sdc&gt;  /var/ossec              xfs  defaults,noatime  0 2
-EOF
-
-mount -a
-df -h /var/lib/wazuh-indexer /var/ossec</code></pre>
-
-      <h4>Перед передачей</h4>
+      <h4>Что скрипт сделает и что останется проверить</h4>
       <ul class="check">
         <li>Три тома смонтированы, записи в <code>/etc/fstab</code> есть</li>
         <li>Статический адрес, шлюз и DNS настроены, имя узла <b>wazuh-pilot</b></li>
@@ -561,7 +548,32 @@ df -h /var/lib/wazuh-indexer /var/ossec</code></pre>
         события ни доставлялись.
       </p>
 
-      <h4>Групповая политика: расширенный аудит</h4>
+      <h4>Быстрый путь: скрипт</h4>
+      <p>
+        Применяет всё сразу и проверяет результат чтением обратно.
+        На пилоте из двух контроллеров этого достаточно.
+      </p>
+<pre><code><span class="c"># На каждом контроллере домена, от администратора</span>
+.\Enable-AdAuditPolicy.ps1
+
+<span class="c"># Посмотреть текущее состояние, ничего не меняя</span>
+.\Enable-AdAuditPolicy.ps1 -VerifyOnly
+
+<span class="c"># Что перенести в групповую политику, чтобы настройки
+# пережили следующее её применение</span>
+.\Enable-AdAuditPolicy.ps1 -ShowGpoSettings</code></pre>
+      <div class="warn">
+        <h4>Скрипт применяет локально</h4>
+        <p>
+          Настройки действуют немедленно, но следующее применение
+          групповой политики может их перезаписать. Для постоянного
+          режима те же параметры задаются в Default Domain Controllers
+          Policy — состав выводится ключом <code>-ShowGpoSettings</code>
+          и продублирован ниже.
+        </p>
+      </div>
+
+      <h4>То же самое групповой политикой</h4>
       <p>
         Конфигурация компьютера → Политики → Конфигурация Windows →
         Параметры безопасности → Расширенная настройка политики аудита.
