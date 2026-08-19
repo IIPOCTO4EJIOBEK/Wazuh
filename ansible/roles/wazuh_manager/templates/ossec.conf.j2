@@ -39,6 +39,10 @@
        Кластер менеджеров.
        master принимает регистрацию агентов и держит эталон правил;
        worker получает от него правила, группы и client.keys.
+
+       При единственном менеджере (пилот) кластер отключается: включённый
+       кластер из одного узла добавляет накладные расходы и лишние записи
+       об ошибках синхронизации, не давая ничего взамен.
        ================================================================ -->
   <cluster>
     <name>{{ manager_cluster_name }}</name>
@@ -53,7 +57,7 @@
 {% endfor %}
     </nodes>
     <hidden>no</hidden>
-    <disabled>no</disabled>
+    <disabled>{{ 'no' if groups['wazuh_manager'] | length > 1 else 'yes' }}</disabled>
   </cluster>
 
   <!-- ================================================================
@@ -68,6 +72,30 @@
     <queue_size>131072</queue_size>
     <local_ip>{{ ansible_host }}</local_ip>
   </remote>
+
+{% if syslog_reception_enabled | default(false) %}
+  <!-- ================================================================
+       Приём syslog от систем, на которые агент не ставится.
+
+       Отправители перечислены явно: порт syslog без списка разрешённых
+       адресов принимает события от кого угодно, а подделать syslog по UDP
+       может любой узел сети — в SIEM появятся выдуманные события.
+
+       Ограничение, о котором надо помнить: события, пришедшие по syslog,
+       разбираются как обычный текст. Правила, написанные под поля
+       журнала Windows (win.system.eventID и прочие), на них не сработают.
+       Подробности и обход — docs/14-pilot.md.
+       ================================================================ -->
+  <remote>
+    <connection>syslog</connection>
+    <port>{{ syslog_port | default(514) }}</port>
+    <protocol>{{ syslog_protocol | default('tcp') }}</protocol>
+    <local_ip>{{ ansible_host }}</local_ip>
+{% for net in syslog_allowed_senders | default([]) %}
+    <allowed-ips>{{ net }}</allowed-ips>
+{% endfor %}
+  </remote>
+{% endif %}
 
 {% if manager_node_type == 'master' %}
   <!-- ================================================================

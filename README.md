@@ -56,6 +56,15 @@ Active Directory, Hyper-V, MSSQL, ServiceDesk Plus и Zabbix. Правила
 
 ## Быстрый старт
 
+Пилот (одна машина, без отказоустойчивости) разворачивается своим
+инвентарём — см. [docs/14-pilot.md](docs/14-pilot.md):
+
+```bash
+ansible-playbook -i inventory/pilot/hosts.yml site.yml --ask-vault-pass
+```
+
+Отказоустойчивый комплект:
+
 ```bash
 cd ansible
 
@@ -118,6 +127,7 @@ ansible-playbook playbooks/agents-linux.yml --ask-vault-pass
 | [11 Разбор неисправностей](docs/11-troubleshooting.md) | Симптом → причина → что делать |
 | [12 Геораспределение](docs/12-geo-distribution.md) | Разнос по площадкам: варианты, кворум, влияние на отказоустойчивость |
 | [13 Резервирование сети](docs/13-network-redundancy.md) | Интерфейсы, коммутаторы, шлюз, каналы между площадками |
+| [14 Пилот](docs/14-pilot.md) | Виртуальные машины, подключение AD и Bitrix, запуск и приёмка |
 
 ---
 

@@ -114,7 +114,8 @@
 - name: Список узлов, которым нужен сертификат
   ansible.builtin.set_fact:
     cert_nodes: >-
-      {{ groups['wazuh_indexer'] + groups['wazuh_manager'] + groups['wazuh_dashboard'] }}
+      {{ (groups['wazuh_indexer'] + groups['wazuh_manager'] + groups['wazuh_dashboard'])
+         | unique | list }}
 
 - name: Ключи узлов
   community.crypto.openssl_privatekey:

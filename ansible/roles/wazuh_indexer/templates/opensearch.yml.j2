@@ -30,7 +30,7 @@ cluster.initial_cluster_manager_nodes:
 
 # Не давать кластеру собраться из одного узла при сетевом разрыве
 # (защита от split-brain: минимум двух узлов достаточно).
-gateway.recover_after_data_nodes: 2
+gateway.recover_after_data_nodes: {{ [ (groups['wazuh_indexer'] | length // 2) + 1, 1 ] | max }}
 gateway.expected_data_nodes: {{ groups['wazuh_indexer'] | length }}
 gateway.recover_after_time: 5m
 

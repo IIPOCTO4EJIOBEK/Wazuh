@@ -29,11 +29,16 @@
     path: /etc/hosts
     marker: "# {mark} WAZUH CLUSTER (управляется Ansible)"
     block: |
-      {% for h in groups['wazuh_indexer'] + groups['wazuh_manager'] + groups['wazuh_dashboard'] %}
+      {% for h in (groups['wazuh_indexer'] + groups['wazuh_manager'] + groups['wazuh_dashboard']) | unique %}
       {{ hostvars[h].ansible_host }} {{ h }} {{ h }}.{{ wazuh_domain }}
       {% endfor %}
+      {% if groups['wazuh_lb'] | default([]) | length > 0 %}
       {{ wazuh_vip_agents }} {{ wazuh_agents_fqdn }}
       {{ wazuh_vip_dashboard }} {{ wazuh_dashboard_fqdn }}
+      {% else %}
+      {{ hostvars[groups['wazuh_manager'][0]].ansible_host }} {{ wazuh_agents_fqdn }}
+      {{ hostvars[groups['wazuh_dashboard'][0]].ansible_host }} {{ wazuh_dashboard_fqdn }}
+      {% endif %}
 
 # ---------------------------------------------------------------------
 # Репозиторий
@@ -167,7 +172,7 @@
     rule: allow
     proto: "112"
     src: "{{ hostvars[item].ansible_host }}"
-  loop: "{{ groups['wazuh_lb'] }}"
+  loop: "{{ groups['wazuh_lb'] | default([]) }}"
   when:
     - ansible_os_family == 'Debian'
     - "'wazuh_lb' in group_names"
