@@ -232,4 +232,56 @@
     <group>service_availability,web,</group>
   </rule>
 
+  <!-- ================================================================
+       Уязвимости.
+
+       Модуль обнаружения уязвимостей сам по себе только наполняет
+       дашборд. Пока никто не откроет вкладку, число критичных
+       уязвимостей на сервере никого не беспокоит: на PDC-DB1
+       20.08.2026 их набралось 18, а сервер не обновлялся с середины
+       2024 года, и узнали об этом при первом же взгляде на отчёт.
+
+       Правила ниже переводят это в поток событий: критичная
+       уязвимость на узле из списка ahp-critical-hosts — повод для
+       заявки, а не для ежемесячной сводки.
+
+       ВНИМАНИЕ, ТРЕБУЕТ ПРОВЕРКИ НА СТЕНДЕ. Правила опираются на
+       группу vulnerability-detector и на имена полей события. И то и
+       другое зависит от версии менеджера. Перед тем как полагаться на
+       эти правила, нужно посмотреть на настоящее событие:
+
+         /var/ossec/bin/wazuh-logtest
+         grep -A5 '"vulnerability"' /var/ossec/logs/alerts/alerts.json | head -40
+
+       и при расхождении поправить имена полей здесь.
+       ================================================================ -->
+
+  <rule id="100480" level="12">
+    <if_group>vulnerability-detector</if_group>
+    <field name="data.vulnerability.severity" type="pcre2">(?i)^critical$</field>
+    <list field="agent.name" lookup="match_key">etc/lists/ahp-critical-hosts</list>
+    <description>Критичная уязвимость $(data.vulnerability.cve) на ключевом узле $(agent.name)</description>
+    <group>vulnerability,</group>
+  </rule>
+
+  <rule id="100481" level="7">
+    <if_group>vulnerability-detector</if_group>
+    <field name="data.vulnerability.severity" type="pcre2">(?i)^critical$</field>
+    <description>Критичная уязвимость $(data.vulnerability.cve) на $(agent.name)</description>
+    <group>vulnerability,</group>
+  </rule>
+
+  <!-- Уязвимость, о которой известно, что её используют в атаках.
+       Признак — упоминание каталога CISA KEV в ссылках события.
+       Такие обновляются вне очереди, независимо от оценки CVSS. -->
+  <rule id="100482" level="13">
+    <if_group>vulnerability-detector</if_group>
+    <field name="data.vulnerability.reference" type="pcre2">(?i)known-exploited-vulnerabilities</field>
+    <description>Уязвимость $(data.vulnerability.cve) на $(agent.name) используется в атаках (CISA KEV)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>vulnerability,</group>
+  </rule>
+
 </group>
