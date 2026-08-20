@@ -8,6 +8,7 @@ wazuh_agent_group_list:
   - bitrix-web
   - database
   - dmz
+  - asterisk
   - dc
   - hyperv
   - mssql

@@ -12,6 +12,18 @@ all_access:
   hidden: false
   backend_roles:
     - "admin"
+  users:
+    - "chulichkov.vm"
+    - "dulepov.av"
+    - "ermolaev.ag"
+    - "kirievskaya.es"
+    - "kotova.da"
+    - "pedko.tv"
+    - "presnov.av"
+    - "savenko.vm"
+    - "strekozov.iv"
+    - "tsekhovskoy.va"
+    - "velikorodnykh.av"
   description: "Полный доступ"
 
 own_index:
@@ -44,6 +56,7 @@ wazuh_reader:
   reserved: false
   users:
     - "auditor"
+    - "*"
   backend_roles:
     - "wazuh_reader"
 
@@ -52,6 +65,7 @@ kibana_user:
   reserved: false
   users:
     - "auditor"
+    - "*"
   backend_roles:
     - "wazuh_reader"
 

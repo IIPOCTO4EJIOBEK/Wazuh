@@ -94,11 +94,10 @@
   </rule>
 
   <!-- Самое опасное сочетание: серия отказов, а следом успешный вход. -->
-  <rule id="100011" level="14">
+  <rule id="100011" level="14" timeframe="300">
     <if_sid>5715</if_sid>
     <if_matched_sid>5716</if_matched_sid>
     <same_source_ip />
-    <timeframe>300</timeframe>
     <description>Успешный вход SSH с $(srcip) сразу после серии неудачных попыток</description>
     <mitre>
       <id>T1110.001</id>
@@ -108,7 +107,7 @@
 
   <rule id="100012" level="10">
     <if_sid>5715</if_sid>
-    <field name="dstuser">^root$</field>
+    <field name="full_log" type="pcre2">(?i)accepted .+ for root from </field>
     <description>Прямой вход по SSH под root на $(agent.name)</description>
     <mitre>
       <id>T1078.003</id>
@@ -153,7 +152,6 @@
   </rule>
 
   <rule id="100031" level="12">
-    <decoded_as>syslog</decoded_as>
     <match type="pcre2">audit_rules_removed|auditctl\s+-D|systemctl\s+stop\s+(auditd|rsyslog|syslog-ng)</match>
     <description>Остановлена подсистема аудита на $(agent.name)</description>
     <mitre>

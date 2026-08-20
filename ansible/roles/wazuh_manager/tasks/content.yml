@@ -40,6 +40,31 @@
     - ahp-critical-hosts
   notify: rebuild cdb lists
 
+- name: Каталог списков IOC
+  ansible.builtin.file:
+    path: /var/ossec/etc/lists/malicious-ioc
+    state: directory
+    owner: root
+    group: wazuh
+    mode: "0770"
+
+- name: Пустые списки IOC по умолчанию
+  ansible.builtin.copy:
+    dest: "/var/ossec/etc/lists/malicious-ioc/{{ item.name }}"
+    content: "{{ item.placeholder }}\n"
+    owner: root
+    group: wazuh
+    mode: "0660"
+    force: false
+  loop:
+    - { name: "malware-hashes", placeholder: "0000000000000000000000000000000000000000000000000000000000000000:placeholder" }
+    - { name: "malicious-ip", placeholder: "0.0.0.0:placeholder" }
+    - { name: "malicious-domains", placeholder: "invalid.local:placeholder" }
+  notify: rebuild cdb lists
+
+- name: Пересобрать CDB-списки до проверки правил
+  ansible.builtin.meta: flush_handlers
+
 - name: Список адресов, которые нельзя блокировать
   ansible.builtin.copy:
     dest: /var/ossec/etc/lists/ar-never-block.txt

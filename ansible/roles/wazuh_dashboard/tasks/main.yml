@@ -39,6 +39,14 @@
   no_log: true
   notify: restart wazuh-dashboard
 
+- name: Каталог конфигурации wazuh.yml (создаётся пакетом при первом старте)
+  ansible.builtin.file:
+    path: /usr/share/wazuh-dashboard/data/wazuh/config
+    state: directory
+    owner: wazuh-dashboard
+    group: wazuh-dashboard
+    mode: "0750"
+
 - name: Подключение к Wazuh API
   ansible.builtin.template:
     src: wazuh.yml.j2

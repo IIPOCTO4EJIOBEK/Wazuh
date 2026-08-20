@@ -10,7 +10,7 @@
     cmd: |
       set -o pipefail
       printf '%s\n' {{ item.sample | quote }} \
-        | /var/ossec/bin/wazuh-logtest -q -l {{ item.location | quote }} 2>&1
+        | /var/ossec/bin/wazuh-logtest -l {{ item.location | quote }} 2>&1
     executable: /bin/bash
   loop: "{{ wazuh_rule_selftest_cases }}"
   loop_control:

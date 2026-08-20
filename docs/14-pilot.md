@@ -80,8 +80,8 @@ Bitrix, журналы направляются в приёмник в Моск�
 
 | Параметр | Значение |
 |----------|----------|
-| Адрес | статический, в серверной сети Москвы (`10.3.251.0/24`) |
-| Предполагаемый | `10.3.251.40` — уточнить и зафиксировать |
+| Адрес | статический, сервер пилота `10.17.1.252` |
+| Пилотный | `10.17.1.252` |
 | Шлюз, DNS | как принято в сегменте; DNS обязателен — без него не разрешатся имена контроллеров домена |
 | Интерфейс | один; резервирование делается на гипервизоре, см. [13-network-redundancy.md](13-network-redundancy.md) |
 | Синхронизация времени | **обязательна**, тот же источник NTP, что у контроллеров домена |
@@ -470,8 +470,8 @@ cp group_vars/vault.yml.example group_vars/vault.yml
 $EDITOR group_vars/vault.yml
 ansible-vault encrypt group_vars/vault.yml
 
-# 2. Вписать выданный адрес
-$EDITOR inventory/pilot/hosts.yml
+# 2. Проверить адрес пилота
+grep -n "10.17.1.252" inventory/pilot/hosts.yml
 
 # 3. Проверка машины до установки
 ansible-playbook -i inventory/pilot/hosts.yml site.yml --tags preflight --ask-vault-pass

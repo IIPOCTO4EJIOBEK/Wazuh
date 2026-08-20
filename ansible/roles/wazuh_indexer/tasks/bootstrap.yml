@@ -64,6 +64,10 @@
       index_patterns: ["wazuh-alerts-*"]
       priority: 200
       template:
+        # Маппинги из wazuh-template.json (filebeat): composable-шаблон
+        # перекрывает legacy-шаблон filebeat, без маппингов поля становятся
+        # динамическими text и агрегации дашборда (manager.name) падают.
+        mappings: "{{ lookup('template', 'wazuh-alerts-mappings.json.j2') | from_json }}"
         settings:
           index.number_of_shards: "{{ indexer_alerts_shards }}"
           index.number_of_replicas: "{{ indexer_alerts_replicas }}"
@@ -83,7 +87,7 @@
     force_basic_auth: true
     validate_certs: false
     body_format: json
-    body: "{{ lookup('template', 'ism-wazuh-alerts.json.j2') | from_json }}"
+    body: "{{ lookup('template', 'ism-wazuh-alerts.json.j2') }}"
     status_code: [200, 201, 409]
 
 - name: Итог инициализации

@@ -42,18 +42,60 @@ def oid(name):
 # ---------------------------------------------------------------------
 # Шаблоны индексов
 # ---------------------------------------------------------------------
-def index_pattern(title, time_field="timestamp"):
+def field(name, field_type="string", es_type="keyword", aggregatable=True):
+    return {
+        "name": name,
+        "type": field_type,
+        "esTypes": [es_type],
+        "count": 0,
+        "scripted": False,
+        "searchable": True,
+        "aggregatable": aggregatable,
+        "readFromDocValues": aggregatable,
+    }
+
+
+def index_pattern(title, time_field="timestamp", fields=None):
     return {
         "id": oid("index-pattern-" + title),
         "type": "index-pattern",
         "attributes": {
             "title": title,
             "timeFieldName": time_field,
-            "fields": "[]",
+            "fields": json.dumps(fields or [], ensure_ascii=False),
         },
         "references": [],
         "migrationVersion": {"index-pattern": "7.6.0"},
     }
+
+
+ALERT_FIELDS = [
+    field("timestamp", "date", "date", aggregatable=True),
+    field("agent.name"),
+    field("rule.level", "number", "integer", aggregatable=True),
+    field("rule.description"),
+    field("rule.groups"),
+    field("rule.mitre.technique"),
+    field("data.srcip", "ip", "ip", aggregatable=True),
+    field("syscheck.path"),
+    field("syscheck.event"),
+    field("ar.action"),
+    field("ar.target"),
+    field("ar.result"),
+    field("win.eventdata.targetUserName"),
+    field("backup.job"),
+    field("backup.status"),
+    field("backup.target"),
+]
+
+
+VULN_FIELDS = [
+    field("@timestamp", "date", "date", aggregatable=True),
+    field("agent.name"),
+    field("package.name"),
+    field("vulnerability.id"),
+    field("vulnerability.severity"),
+]
 
 
 # ---------------------------------------------------------------------
@@ -304,8 +346,8 @@ def dashboard(name, title, description, panels, time_from="now-24h", time_to="no
 def build():
     objects = []
 
-    alerts_ip = index_pattern(ALERTS_PATTERN)
-    vuln_ip = index_pattern(VULN_PATTERN, time_field="@timestamp")
+    alerts_ip = index_pattern(ALERTS_PATTERN, fields=ALERT_FIELDS)
+    vuln_ip = index_pattern(VULN_PATTERN, time_field="@timestamp", fields=VULN_FIELDS)
     objects += [alerts_ip, vuln_ip]
     a_id = alerts_ip["id"]
     v_id = vuln_ip["id"]
@@ -436,9 +478,9 @@ def build():
             "type": "table",
             "aggs": [
                 agg_count("1"),
-                agg_terms("2", "data.ar.action", 10, schema="bucket"),
-                agg_terms("3", "data.ar.target", 25, schema="bucket"),
-                agg_terms("4", "data.ar.result", 5, schema="bucket"),
+                agg_terms("2", "ar.action", 10, schema="bucket"),
+                agg_terms("3", "ar.target", 25, schema="bucket"),
+                agg_terms("4", "ar.result", 5, schema="bucket"),
             ],
             "params": table_params(20),
         },
@@ -457,7 +499,7 @@ def build():
             "aggs": [
                 agg_count("1"),
                 agg_terms("2", "rule.description", 20, schema="bucket"),
-                agg_terms("3", "data.win.eventdata.targetUserName", 10, schema="bucket"),
+                agg_terms("3", "win.eventdata.targetUserName", 10, schema="bucket"),
             ],
             "params": table_params(20),
         },
@@ -492,9 +534,9 @@ def build():
             "type": "table",
             "aggs": [
                 agg_count("1"),
-                agg_terms("2", "data.backup.job", 10, schema="bucket"),
-                agg_terms("3", "data.backup.status", 5, schema="bucket"),
-                agg_terms("4", "data.backup.target", 5, schema="bucket"),
+                agg_terms("2", "backup.job", 10, schema="bucket"),
+                agg_terms("3", "backup.status", 5, schema="bucket"),
+                agg_terms("4", "backup.target", 5, schema="bucket"),
             ],
             "params": table_params(10),
         },

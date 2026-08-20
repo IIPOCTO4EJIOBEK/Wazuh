@@ -66,8 +66,8 @@
       password: "{{ item.password }}"
     status_code: [200]
   loop:
-    - { username: "wazuh", password: "{{ vault_wazuh_api_password }}" }
     - { username: "wazuh-wui", password: "{{ vault_wazuh_wui_password }}" }
+    - { username: "wazuh", password: "{{ vault_wazuh_api_password }}" }
   loop_control:
     label: "{{ item.username }}"
   no_log: true

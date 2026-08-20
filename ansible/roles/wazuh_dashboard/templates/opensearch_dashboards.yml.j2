@@ -6,9 +6,6 @@ server.host: "0.0.0.0"
 server.port: {{ dashboard_port }}
 server.name: "{{ inventory_hostname }}"
 
-# Публичный адрес — VIP. Без него ссылки в отчётах и уведомлениях
-# ведут на конкретный узел, который может быть выключен.
-server.publicBaseUrl: "https://{{ wazuh_dashboard_fqdn }}"
 
 opensearch.hosts:
 {% for h in groups['wazuh_indexer'] %}
@@ -19,7 +16,7 @@ opensearch.ssl.verificationMode: certificate
 opensearch.ssl.certificateAuthorities: ["/etc/wazuh-dashboard/certs/root-ca.pem"]
 opensearch.username: "kibanaserver"
 opensearch.password: "{{ vault_indexer_kibanaserver_password }}"
-opensearch.requestHeadersWhitelist: ["securitytenant", "Authorization"]
+opensearch.requestHeadersAllowlist: ["securitytenant", "Authorization"]
 
 server.ssl.enabled: true
 server.ssl.certificate: "/etc/wazuh-dashboard/certs/dashboard.pem"
@@ -40,8 +37,5 @@ uiSettings.overrides."timepicker:timeDefaults": '{ "from": "now-24h", "to": "now
 
 # Телеметрия наружу отключена: сегмент мониторинга не имеет выхода
 # в интернет, а неудачные попытки отправки засоряют журнал.
-telemetry.enabled: false
-newsfeed.enabled: false
-usageCollection.enabled: false
 
 logging.dest: /var/log/wazuh-dashboard/dashboard.log

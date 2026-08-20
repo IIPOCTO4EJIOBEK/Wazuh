@@ -104,18 +104,6 @@
     <group>authentication_failures,</group>
   </rule>
 
-  <!-- Приложение внутреннее. Обращение из-за пределов корпоративных
-       сетей означает либо ошибку публикации на NPM, либо обход. -->
-  <rule id="100213" level="12">
-    <if_sid>100210</if_sid>
-    <field name="srcip" negate="yes" type="pcre2">^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.)</field>
-    <description>Заявка РМ: обращение с внешнего адреса $(srcip)</description>
-    <mitre>
-      <id>T1190</id>
-    </mitre>
-    <group>attack,</group>
-  </rule>
-
   <!-- Перебор идентификаторов заявок в zayavka-view.php: попытка
        прочитать чужие заявки с персональными данными сотрудников. -->
   <rule id="100214" level="12" frequency="30" timeframe="60">
@@ -187,7 +175,7 @@
        не должно: резервные копии, файлы окружения, каталог .git. -->
   <rule id="100232" level="12">
     <if_sid>31100,31101,31108</if_sid>
-    <field name="url" type="pcre2">(\.git/|\.env$|\.bak$|\.sql$|/backup/|zayavka_log\.json)</field>
+    <field name="full_log" type="pcre2">(\.git/|\.env$|\.bak$|\.sql$|/backup/|zayavka_log\.json)</field>
     <description>Попытка скачать служебный файл портала: $(url) с $(srcip)</description>
     <mitre>
       <id>T1595.003</id>
@@ -203,7 +191,7 @@
   <rule id="100240" level="12">
     <if_sid>5715</if_sid>
     <list field="agent.name" lookup="match_key">etc/lists/ahp-critical-hosts</list>
-    <field name="dstuser" type="pcre2">^(bitrix|root|mysql)$</field>
+    <field name="full_log" type="pcre2">(?i)accepted .+ for (bitrix|root|mysql) from </field>
     <description>Вход служебной учётной записью $(dstuser) на узел СУБД портала $(agent.name)</description>
     <mitre>
       <id>T1078.003</id>

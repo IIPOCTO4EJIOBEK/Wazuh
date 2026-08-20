@@ -81,6 +81,7 @@
           Authorization: "Bearer {{ api_token.json.data.token }}"
         validate_certs: false
       register: mgr_health
+      when: groups['wazuh_manager'] | length > 1
 
     - name: Оба менеджера на связи
       ansible.builtin.assert:
@@ -88,6 +89,7 @@
         fail_msg: >-
           В кластере менеджеров {{ mgr_health.json.data.affected_items | length }} узлов
           из {{ groups['wazuh_manager'] | length }}.
+      when: groups['wazuh_manager'] | length > 1
 
     - name: Сводка по агентам
       ansible.builtin.uri:
@@ -100,15 +102,17 @@
     - name: Отключённых агентов не больше 5 процентов
       ansible.builtin.assert:
         that:
-          - (agents_summary.json.data.disconnected | int)
-            <= (agents_summary.json.data.total | int) * 0.05
+          - (agents_summary.json.data.connection.disconnected | int)
+            <= ((agents_summary.json.data.connection.active | int)
+                + (agents_summary.json.data.connection.disconnected | int)
+                + (agents_summary.json.data.connection.never_connected | int)) * 0.05
         fail_msg: >-
-          Отключено {{ agents_summary.json.data.disconnected }} агентов
-          из {{ agents_summary.json.data.total }}.
+          Отключено {{ agents_summary.json.data.connection.disconnected }} агентов
+          из {{ agents_summary.json.data.connection.active + agents_summary.json.data.connection.disconnected + agents_summary.json.data.connection.never_connected }}.
         success_msg: >-
-          Агенты: активных {{ agents_summary.json.data.active }},
-          отключённых {{ agents_summary.json.data.disconnected }},
-          никогда не подключались {{ agents_summary.json.data.never_connected }}.
+          Агенты: активных {{ agents_summary.json.data.connection.active }},
+          отключённых {{ agents_summary.json.data.connection.disconnected }},
+          никогда не подключались {{ agents_summary.json.data.connection.never_connected }}.
 
 - name: Состояние балансировщиков
   hosts: wazuh_lb

@@ -73,8 +73,47 @@
   notify: restart wazuh-manager
 
 # ---------------------------------------------------------------------
+# Креды индексера для модулей состояния (Wazuh 4.14).
+#
+# Секция <indexer> в ossec.conf НЕ используется коннектором модулей
+# (inventory, vulnerability-scanner): он читает keystore менеджера
+# (family=indexer, keys=username/password) и без них падает с
+# «IndexerConnector initialization failed» и индексы wazuh-states-*
+# не создаются. См. инцидент пилота 2026-08-20.
+# ---------------------------------------------------------------------
+- name: Креды индексер-коннектора в keystore менеджера
+  ansible.builtin.shell: |
+    set -e
+    /var/ossec/bin/wazuh-keystore -f indexer -k username -v admin
+    /var/ossec/bin/wazuh-keystore -f indexer -k password -v "{{ vault_indexer_admin_password }}"
+  no_log: true
+  notify: restart wazuh-manager
+
+# ---------------------------------------------------------------------
 # Wazuh API
 # ---------------------------------------------------------------------
+- name: Каталог TLS-сертификатов Wazuh API
+  ansible.builtin.file:
+    path: /var/ossec/api/configuration/ssl
+    state: directory
+    owner: root
+    group: wazuh
+    mode: "0750"
+
+- name: TLS-сертификаты Wazuh API
+  ansible.builtin.copy:
+    src: "/etc/filebeat/certs/{{ item }}"
+    dest: "/var/ossec/api/configuration/ssl/{{ item }}"
+    remote_src: true
+    owner: root
+    group: wazuh
+    mode: "0640"
+  loop:
+    - root-ca.pem
+    - manager.pem
+    - manager-key.pem
+  notify: restart wazuh-manager
+
 - name: Конфигурация Wazuh API
   ansible.builtin.template:
     src: api.yaml.j2

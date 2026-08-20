@@ -1,6 +1,7 @@
 # Секреты развёртывания: в репозиторий не попадают ни в открытом,
 # ни в зашифрованном виде.
 ansible/group_vars/vault.yml
+ansible/inventory/pilot/group_vars/vault.yml
 ansible/.vault_pass
 
 # Сертификаты внутреннего УЦ. Закрытые ключи хранятся там же, где

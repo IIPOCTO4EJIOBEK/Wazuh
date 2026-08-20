@@ -11,6 +11,7 @@
 #  Использование:
 #      sudo ./install-wazuh-agent.sh --password 'пароль'
 #      sudo ./install-wazuh-agent.sh --password 'пароль' --groups 'default,linux,dmz'
+#      sudo ./install-wazuh-agent.sh --password 'пароль' --name 'server-01'
 #
 #  Группы, если не указаны, определяются по установленным службам.
 # =====================================================================
@@ -19,8 +20,9 @@ set -uo pipefail
 
 MANAGER="10.5.2.90"
 VERSION="4.14.7"
-GROUPS=""
+AGENT_GROUPS=""
 PASSWORD=""
+AGENT_NAME=""
 FORCE=0
 
 log()  { echo "[$(date '+%H:%M:%S')] $*"; }
@@ -30,7 +32,8 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --manager)  MANAGER="${2:-}"; shift 2 ;;
         --password) PASSWORD="${2:-}"; shift 2 ;;
-        --groups)   GROUPS="${2:-}"; shift 2 ;;
+        --groups)   AGENT_GROUPS="${2:-}"; shift 2 ;;
+        --name)     AGENT_NAME="${2:-}"; shift 2 ;;
         --version)  VERSION="${2:-}"; shift 2 ;;
         --force)    FORCE=1; shift ;;
         -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
@@ -77,8 +80,10 @@ fi
 
 [ -n "$PASSWORD" ] || fail "не указан пароль регистрации (--password)"
 
-[ -n "$GROUPS" ] || GROUPS="$(detect_groups)"
-log "группы агента: ${GROUPS}"
+[ -n "$AGENT_GROUPS" ] || AGENT_GROUPS="$(detect_groups)"
+[ -n "$AGENT_NAME" ] || AGENT_NAME="$(hostname -s)"
+log "группы агента: ${AGENT_GROUPS}"
+log "имя агента: ${AGENT_NAME}"
 
 # --- Репозиторий ------------------------------------------------------
 if command -v apt-get >/dev/null 2>&1; then
@@ -94,8 +99,8 @@ if command -v apt-get >/dev/null 2>&1; then
     WAZUH_MANAGER="$MANAGER" \
     WAZUH_REGISTRATION_SERVER="$MANAGER" \
     WAZUH_REGISTRATION_PASSWORD="$PASSWORD" \
-    WAZUH_AGENT_NAME="$(hostname -s)" \
-    WAZUH_AGENT_GROUP="$GROUPS" \
+    WAZUH_AGENT_NAME="$AGENT_NAME" \
+    WAZUH_AGENT_GROUP="$AGENT_GROUPS" \
     WAZUH_PROTOCOL="tcp" \
     apt-get install -y "wazuh-agent=${VERSION}-1" || fail "установка не удалась"
 
@@ -119,8 +124,8 @@ EOF
     WAZUH_MANAGER="$MANAGER" \
     WAZUH_REGISTRATION_SERVER="$MANAGER" \
     WAZUH_REGISTRATION_PASSWORD="$PASSWORD" \
-    WAZUH_AGENT_NAME="$(hostname -s)" \
-    WAZUH_AGENT_GROUP="$GROUPS" \
+    WAZUH_AGENT_NAME="$AGENT_NAME" \
+    WAZUH_AGENT_GROUP="$AGENT_GROUPS" \
     WAZUH_PROTOCOL="tcp" \
     "$PKG" install -y "wazuh-agent-${VERSION}" || fail "установка не удалась"
 
@@ -130,6 +135,8 @@ fi
 
 # --- Запуск -----------------------------------------------------------
 systemctl daemon-reload
+grep -q '^logcollector.remote_commands=1' /var/ossec/etc/local_internal_options.conf 2>/dev/null \
+    || echo 'logcollector.remote_commands=1' >> /var/ossec/etc/local_internal_options.conf
 systemctl enable wazuh-agent >/dev/null 2>&1
 systemctl restart wazuh-agent
 

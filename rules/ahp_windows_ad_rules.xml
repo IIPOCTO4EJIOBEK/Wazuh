@@ -25,7 +25,7 @@
        ================================================================ -->
 
   <rule id="100300" level="5">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.system.eventID" type="pcre2">^4625$</field>
     <description>Windows: неудачный вход, учётная запись $(win.eventdata.targetUserName) на $(win.system.computer)</description>
     <mitre>
@@ -58,7 +58,7 @@
   </rule>
 
   <rule id="100303" level="12">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.system.eventID" type="pcre2">^4740$</field>
     <description>Active Directory: заблокирована учётная запись $(win.eventdata.targetUserName)</description>
     <mitre>
@@ -80,7 +80,7 @@
        администратор домена не должен входить туда, откуда его хеш
        может забрать вредонос. -->
   <rule id="100305" level="12">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.system.eventID" type="pcre2">^4624$</field>
     <field name="win.eventdata.logonType" type="pcre2">^(2|10)$</field>
     <list field="win.eventdata.targetUserName" lookup="match_key">etc/lists/ahp-privileged-users</list>
@@ -97,7 +97,7 @@
        ================================================================ -->
 
   <rule id="100310" level="15">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.system.eventID" type="pcre2">^1116$|^1117$</field>
     <description>Microsoft Defender обнаружил вредоносное ПО на $(win.system.computer)</description>
     <mitre>
@@ -110,7 +110,7 @@
        шифровальщика. Реакция должна быть немедленной и автоматической:
        за время ручного разбора шифруется файловый сервер целиком. -->
   <rule id="100311" level="15">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.eventdata.commandLine" type="pcre2">(?i)(vssadmin\s+delete\s+shadows|wbadmin\s+delete\s+catalog|bcdedit.+recoveryenabled\s+no|wmic\s+shadowcopy\s+delete)</field>
     <description>Шифровальщик: удаление теневых копий на $(win.system.computer)</description>
     <mitre>
@@ -121,7 +121,7 @@
 
   <rule id="100312" level="15" frequency="200" timeframe="60">
     <if_matched_sid>554</if_matched_sid>
-    <same_agent />
+    <same_location />
     <description>Шифровальщик: более 200 новых файлов за минуту на $(agent.name)</description>
     <mitre>
       <id>T1486</id>
@@ -133,7 +133,7 @@
        Уровень 13, без автоматической изоляции: у администраторов
        встречаются легитимные сценарии, ложная изоляция сервера дороже. -->
   <rule id="100313" level="13">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.eventdata.commandLine" type="pcre2">(?i)powershell.*(-enc\s|-encodedcommand|-w\s+hidden|-windowstyle\s+hidden|-nop\s.*-c\s|downloadstring|frombase64string)</field>
     <description>Подозрительный запуск PowerShell на $(win.system.computer)</description>
     <mitre>
@@ -144,7 +144,7 @@
   </rule>
 
   <rule id="100314" level="13">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.eventdata.image" type="pcre2">(?i)\\(mimikatz|procdump|psexec|lazagne|rubeus|sharphound|adfind)\.exe$</field>
     <description>Запущен инструмент атакующего: $(win.eventdata.image) на $(win.system.computer)</description>
     <mitre>
@@ -156,7 +156,7 @@
 
   <!-- Обращение к памяти LSASS — извлечение учётных данных. -->
   <rule id="100315" level="15">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.system.eventID" type="pcre2">^4656$|^4663$</field>
     <field name="win.eventdata.objectName" type="pcre2">(?i)lsass\.exe</field>
     <description>Обращение к памяти LSASS на $(win.system.computer) — извлечение учётных данных</description>
@@ -172,7 +172,7 @@
        ================================================================ -->
 
   <rule id="100320" level="12">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.system.eventID" type="pcre2">^4728$|^4732$|^4756$</field>
     <field name="win.eventdata.targetUserName" type="pcre2">(?i)(domain admins|enterprise admins|schema admins|администраторы домена|администраторы предприятия)</field>
     <description>Active Directory: учётная запись добавлена в привилегированную группу $(win.eventdata.targetUserName)</description>
@@ -184,7 +184,7 @@
   </rule>
 
   <rule id="100321" level="12">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.system.eventID" type="pcre2">^4720$</field>
     <description>Active Directory: создана учётная запись $(win.eventdata.targetUserName)</description>
     <mitre>
@@ -194,7 +194,7 @@
   </rule>
 
   <rule id="100322" level="12">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.system.eventID" type="pcre2">^4725$|^4726$</field>
     <description>Active Directory: учётная запись $(win.eventdata.targetUserName) отключена или удалена</description>
     <mitre>
@@ -204,7 +204,7 @@
   </rule>
 
   <rule id="100323" level="13">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.system.eventID" type="pcre2">^4738$</field>
     <field name="win.eventdata.userAccountControl" type="pcre2">(?i)(passwd_notreqd|dont_expire_passwd|trusted_for_delegation)</field>
     <description>Active Directory: у учётной записи $(win.eventdata.targetUserName) ослаблены требования к паролю или включено делегирование</description>
@@ -217,7 +217,7 @@
   <!-- Kerberoasting: массовый запрос сервисных билетов со слабым
        шифрованием RC4. -->
   <rule id="100324" level="10">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.system.eventID" type="pcre2">^4769$</field>
     <field name="win.eventdata.ticketEncryptionType" type="pcre2">^0x17$</field>
     <description>Kerberos: запрошен сервисный билет со слабым шифрованием RC4</description>
@@ -239,7 +239,7 @@
 
   <!-- Очистка журнала безопасности — почти всегда сокрытие следов. -->
   <rule id="100326" level="14">
-    <if_sid>60000</if_sid>
+    <decoded_as>json</decoded_as>
     <field name="win.system.eventID" type="pcre2">^1102$|^104$</field>
     <description>Windows: очищен журнал событий на $(win.system.computer)</description>
     <mitre>
