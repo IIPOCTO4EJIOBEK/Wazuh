@@ -1,0 +1,261 @@
+<!--
+  =====================================================================
+   Следы работы атакующего: инструменты удалённого исполнения,
+   запуск из служебных каталогов, признаки шифровальщика.
+   Диапазон идентификаторов: 100500–100599.
+
+   Файл заведён по результатам сканирования THOR на pdc-hv0
+   01.07.2026. Разбор — docs/16-incident-pdc-hv0.md. Коротко, что
+   нашёл сканер и чего в правилах не хватало:
+
+     * C:\Windows\winexesvc.exe — служба удалённого исполнения
+       (winexe). Появилась 01.06.2026, за месяц до шифрования.
+       Правило 100314 знает psexec и mimikatz, но не winexe и не
+       семейство impacket.
+
+     * C:\PerfLogs\ded\svhost.exe — шифровальщик. Отработал
+       01.07.2026 с 02:34 до 03:40. Каталог PerfLogs штатно пуст, и
+       запуск чего-либо оттуда — сам по себе повод для тревоги.
+
+     * RECOVER-VPmwmJiwz-FILES.txt — записка вымогателя. Её создание
+       фиксируется контролем целостности раньше, чем последствия
+       заметит человек.
+
+   Правила уровня 15 запускают изоляцию узла — см. секцию
+   active-response в ossec.conf.
+
+   ВАЖНО про события запуска процессов. Поле различается:
+   у события 4688 это win.eventdata.newProcessName, у Sysmon (событие
+   1) — win.eventdata.image. Условия <field> внутри правила
+   объединяются по И, поэтому на каждый признак заведено по паре
+   правил. Одного из них хватит: где стоит Sysmon, сработает второе,
+   где его нет — первое.
+  =====================================================================
+-->
+
+<group name="ahp,ahp_ioc,windows,">
+
+  <!-- ================================================================
+       Запуск из служебных каталогов.
+
+       Перечислены каталоги, из которых штатное программное
+       обеспечение не запускается: PerfLogs (журналы
+       производительности, всегда пуст), корзина, общий профиль,
+       временные каталоги. Каталог ProgramData сознательно не включён:
+       из него работают агенты и обновления, шума было бы больше, чем
+       пользы.
+       ================================================================ -->
+
+  <rule id="100500" level="13">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^4688$</field>
+    <field name="win.eventdata.newProcessName" type="pcre2">(?i)^[a-z]:\\(perflogs|\$recycle\.bin|temp|intel|recovery|users\\public|windows\\temp)\\</field>
+    <description>Запуск из служебного каталога: $(win.eventdata.newProcessName) на $(win.system.computer)</description>
+    <mitre>
+      <id>T1036</id>
+      <id>T1074.001</id>
+    </mitre>
+    <group>suspicious_process,</group>
+  </rule>
+
+  <rule id="100501" level="13">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^1$</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)^[a-z]:\\(perflogs|\$recycle\.bin|temp|intel|recovery|users\\public|windows\\temp)\\</field>
+    <description>Запуск из служебного каталога: $(win.eventdata.image) на $(win.system.computer)</description>
+    <mitre>
+      <id>T1036</id>
+      <id>T1074.001</id>
+    </mitre>
+    <group>suspicious_process,</group>
+  </rule>
+
+  <!-- ================================================================
+       Инструменты удалённого исполнения.
+
+       winexe, psexec, paexec и семейство impacket (atexec, smbexec,
+       wmiexec, dcomexec) — то, чем расходятся по сети после получения
+       учётной записи администратора. Легитимного применения на
+       серверах компании у них нет: удалённое управление идёт через
+       RDP и WinRM.
+       ================================================================ -->
+
+  <rule id="100502" level="15">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^4688$</field>
+    <field name="win.eventdata.newProcessName" type="pcre2">(?i)\\(winexesvc|psexesvc|paexec|paexecsvc|csexecsvc|remcomsvc|atexec|smbexec|wmiexec|dcomexec)\.exe$</field>
+    <description>Инструмент удалённого исполнения запущен: $(win.eventdata.newProcessName) на $(win.system.computer)</description>
+    <mitre>
+      <id>T1569.002</id>
+      <id>T1021.002</id>
+    </mitre>
+    <group>attack_tool,lateral_movement,</group>
+  </rule>
+
+  <rule id="100503" level="15">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^1$</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\(winexesvc|psexesvc|paexec|paexecsvc|csexecsvc|remcomsvc|atexec|smbexec|wmiexec|dcomexec)\.exe$</field>
+    <description>Инструмент удалённого исполнения запущен: $(win.eventdata.image) на $(win.system.computer)</description>
+    <mitre>
+      <id>T1569.002</id>
+      <id>T1021.002</id>
+    </mitre>
+    <group>attack_tool,lateral_movement,</group>
+  </rule>
+
+  <!-- ================================================================
+       Установка службы.
+
+       winexe и psexec работают одинаково: копируют исполняемый файл
+       на узел и регистрируют службу. Событие 7045 (журнал System,
+       Service Control Manager) фиксирует регистрацию, событие 4697 —
+       то же самое в журнале Security. Достаточно любого из них.
+
+       Регистрация службы — момент, когда закрепление ещё можно
+       обнаружить до применения. На pdc-hv0 между появлением
+       winexesvc.exe и запуском шифровальщика прошёл месяц.
+       ================================================================ -->
+
+  <rule id="100510" level="15">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^7045$</field>
+    <field name="win.eventdata.serviceName" type="pcre2">(?i)^(winexesvc|psexesvc|paexec|csexecsvc|remcomsvc|bts_?service)</field>
+    <description>Установлена служба удалённого исполнения $(win.eventdata.serviceName) на $(win.system.computer)</description>
+    <mitre>
+      <id>T1543.003</id>
+      <id>T1569.002</id>
+    </mitre>
+    <group>attack_tool,lateral_movement,</group>
+  </rule>
+
+  <rule id="100511" level="14">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^7045$</field>
+    <field name="win.eventdata.imagePath" type="pcre2">(?i)^"?[a-z]:\\(perflogs|\$recycle\.bin|temp|intel|recovery|users|programdata|windows\\temp)\\</field>
+    <description>Служба $(win.eventdata.serviceName) установлена из служебного каталога на $(win.system.computer)</description>
+    <mitre>
+      <id>T1543.003</id>
+    </mitre>
+    <group>suspicious_process,persistence,</group>
+  </rule>
+
+  <rule id="100512" level="14">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^4697$</field>
+    <field name="win.eventdata.serviceFileName" type="pcre2">(?i)^"?[a-z]:\\(perflogs|\$recycle\.bin|temp|intel|recovery|users|programdata|windows\\temp)\\</field>
+    <description>Служба $(win.eventdata.serviceName) установлена из служебного каталога на $(win.system.computer)</description>
+    <mitre>
+      <id>T1543.003</id>
+    </mitre>
+    <group>suspicious_process,persistence,</group>
+  </rule>
+
+  <!-- ================================================================
+       Следы шифровальщика в контроле целостности.
+
+       Правила строятся от базовых 550 (файл изменён) и 554 (файл
+       добавлен). Работают только там, где каталог включён в syscheck,
+       — см. rules/agent-groups/.
+       ================================================================ -->
+
+  <!-- Записка вымогателя. Шаблон подобран по именам, которые
+       оставляют распространённые семейства, включая наблюдавшийся на
+       pdc-hv0 RECOVER-VPmwmJiwz-FILES.txt. Обычный readme.txt под
+       шаблон не подпадает намеренно: их в системе тысячи. -->
+  <rule id="100520" level="15">
+    <if_sid>550,554</if_sid>
+    <field name="syscheck.path" type="pcre2">(?i)[\\/](recover[-_][^\\/]*[-_]files|how[-_ ]?to[-_ ]?(decrypt|restore)[^\\/]*|[^\\/]*decrypt[-_ ]?(your[-_ ]?)?files[^\\/]*|_readme|!+\s*read[-_ ]?me!*|#recovery#|restore[-_ ]?my[-_ ]?files)\.(txt|hta|html)$</field>
+    <description>Записка вымогателя: $(syscheck.path) на $(agent.name)</description>
+    <mitre>
+      <id>T1486</id>
+    </mitre>
+    <group>ransomware,</group>
+  </rule>
+
+  <!-- Появление исполняемого файла там, где его быть не должно.
+       Уровень 13, без автоматической изоляции: под шаблон попадают и
+       забытые администратором утилиты. -->
+  <rule id="100521" level="13">
+    <if_sid>550,554</if_sid>
+    <field name="syscheck.path" type="pcre2">(?i)^[a-z]:\\(perflogs|\$recycle\.bin|temp|intel|recovery|users\\public|windows\\temp)\\.*\.(exe|dll|sys|scr|ps1|bat|cmd)$</field>
+    <description>Исполняемый файл в служебном каталоге: $(syscheck.path) на $(agent.name)</description>
+    <mitre>
+      <id>T1036</id>
+      <id>T1074.001</id>
+    </mitre>
+    <group>suspicious_file,</group>
+  </rule>
+
+  <!-- Появление исполняемого файла прямо в корне C:\Windows. Штатно
+       там лежит несколько десятков файлов, которые меняются только с
+       обновлениями системы. Именно так на pdc-hv0 появился
+       winexesvc.exe. Каталог включён в наблюдение в
+       rules/agent-groups/windows.conf с recursion_level="0". -->
+  <rule id="100523" level="13">
+    <if_sid>550,554</if_sid>
+    <field name="syscheck.path" type="pcre2">(?i)^[a-z]:\\windows\\[^\\]+\.(exe|dll|sys|scr|ps1|bat|cmd)$</field>
+    <description>Исполняемый файл в корне системного каталога: $(syscheck.path) на $(agent.name)</description>
+    <mitre>
+      <id>T1036.005</id>
+    </mitre>
+    <group>suspicious_file,</group>
+  </rule>
+
+  <!-- Сверка с перечнем известных вредоносных файлов. Список ведётся
+       в rules/lists/malicious-ioc/malware-hashes, туда попадают хеши
+       из отчётов сканирования и от внешних источников. -->
+  <rule id="100522" level="15">
+    <if_sid>550,554</if_sid>
+    <list field="syscheck.sha256" lookup="match_key">etc/lists/malicious-ioc/malware-hashes</list>
+    <description>Известный вредоносный файл: $(syscheck.path) на $(agent.name)</description>
+    <mitre>
+      <id>T1204.002</id>
+    </mitre>
+    <group>malware,ioc,</group>
+  </rule>
+
+  <!-- ================================================================
+       Подавление защиты.
+
+       Отключение Defender почти всегда предшествует применению
+       вредоносного ПО. На pdc-hv0 защита не была отключена — она
+       блокировала обращения шифровальщика к собственным файлам, и
+       следы этого остались только в MPLog, который в журнал событий
+       не попадает. Наблюдаемая часть — вот эти события.
+       ================================================================ -->
+
+  <rule id="100530" level="14">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^5001$|^5010$|^5012$|^5013$</field>
+    <description>Отключена защита Microsoft Defender на $(win.system.computer)</description>
+    <mitre>
+      <id>T1562.001</id>
+    </mitre>
+    <group>defense_evasion,</group>
+  </rule>
+
+  <rule id="100531" level="10">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^5007$</field>
+    <description>Изменены параметры Microsoft Defender на $(win.system.computer)</description>
+    <mitre>
+      <id>T1562.001</id>
+    </mitre>
+    <group>defense_evasion,</group>
+  </rule>
+
+  <!-- Правило сокращения направленных атак заблокировало действие.
+       Событие означает, что попытка была и защита сработала: разбирать
+       нужно всё равно. -->
+  <rule id="100532" level="12">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^1121$|^1126$</field>
+    <description>Microsoft Defender заблокировал действие правилом ASR на $(win.system.computer)</description>
+    <mitre>
+      <id>T1562.001</id>
+    </mitre>
+    <group>defense_evasion,</group>
+  </rule>
+
+</group>

@@ -53,3 +53,26 @@ wazuh_rule_selftest_cases:
       "channel":"System","computer":"pdc-hv0.rusagroeco.ru","severityValue":"WARNING"},
       "eventdata":{"data":"The IO operation at logical block address 0x0 for Disk 4
       was retried."}}}
+
+  # Оба образца взяты из отчёта сканирования pdc-hv0 от 01.07.2026,
+  # см. docs/16-incident-pdc-hv0.md. Каталоги и имена файлов подобраны
+  # так, чтобы правила не пересекались: winexesvc.exe лежит в
+  # C:\Windows и под 100500 не подпадает, svhost.exe не входит в
+  # перечень инструментов удалённого исполнения.
+  - name: "Запуск из служебного каталога"
+    location: "EventChannel"
+    expect_rule: "100500"
+    sample: >-
+      {"win":{"system":{"providerName":"Microsoft-Windows-Security-Auditing",
+      "eventID":"4688","channel":"Security","computer":"pdc-hv0.rusagroeco.ru"},
+      "eventdata":{"newProcessName":"C:\\PerfLogs\\ded\\svhost.exe",
+      "subjectUserName":"vardo001","commandLine":"C:\\PerfLogs\\ded\\svhost.exe"}}}
+
+  - name: "Инструмент удалённого исполнения"
+    location: "EventChannel"
+    expect_rule: "100502"
+    sample: >-
+      {"win":{"system":{"providerName":"Microsoft-Windows-Security-Auditing",
+      "eventID":"4688","channel":"Security","computer":"pdc-hv0.rusagroeco.ru"},
+      "eventdata":{"newProcessName":"C:\\Windows\\winexesvc.exe",
+      "subjectUserName":"SYSTEM","commandLine":"C:\\Windows\\winexesvc.exe"}}}
