@@ -646,8 +646,8 @@ Get-WinEvent -LogName 'Microsoft-Windows-PowerShell/Operational' -MaxEvents 5 |
 pip3 install passlib bcrypt        <span class="c"># без них не соберутся хеши паролей</span>
 ansible-galaxy collection install community.general community.crypto ansible.posix
 
-git clone https://github.com/IIPOCTO4EJIOBEK/Wazuh.git
-cd Wazuh/ansible</code></pre>
+<span class="c"># Распаковать комплект проекта на управляющую машину</span>
+cd &lt;каталог проекта&gt;/ansible</code></pre>
 
       <h4>Секреты</h4>
 <pre><code>cp group_vars/vault.yml.example group_vars/vault.yml
@@ -947,7 +947,8 @@ ssh ansible@&lt;адрес&gt; sudo cat /var/ossec/var/run/wazuh-analysisd.state
   <h2>Приложение: скрипты целиком</h2>
   <div class="prose">
     <p>
-      Здесь те же скрипты, что лежат в репозитории, — полностью. 
+      Здесь те же скрипты, что лежат в комплекте проекта, — 
+      полностью. 
       Чтобы воспользоваться: скопировать, сохранить под указанным 
       именем, для файлов <code>.sh</code> добавить право на 
       выполнение (<code>chmod +x</code>).
@@ -962,7 +963,7 @@ ssh ansible@&lt;адрес&gt; sudo cat /var/ossec/var/run/wazuh-analysisd.state
   <h3 style="margin-top:28px">New-WazuhPilotVM.ps1</h3>
   <div class="prose">
     <p>Создаёт виртуальную машину и снимает четыре настройки Hyper-V по умолчанию, которые мешают: динамическую память, шаблон Secure Boot, автоматические контрольные точки и синхронизацию времени от гипервизора.</p>
-    <p style="font-size:14px;color:var(--ink-3)">Запускается на pdc-hv0, в консоли от администратора · в репозитории: <code>scripts/pilot/New-WazuhPilotVM.ps1</code> · 193 строк</p>
+    <p style="font-size:14px;color:var(--ink-3)">Запускается на pdc-hv0, в консоли от администратора · путь в проекте: <code>scripts/pilot/New-WazuhPilotVM.ps1</code> · 193 строк</p>
   </div>
 <pre><code>&lt;#
 .SYNOPSIS
@@ -1162,7 +1163,7 @@ if ($StartAfterCreate) {
   <h3 style="margin-top:28px">prepare-ubuntu-node.sh</h3>
   <div class="prose">
     <p>Размечает и монтирует тома по UUID, ставит имя узла, настраивает время, заводит учётную запись для Ansible с ключом и sudo без пароля, обновляет пакеты.</p>
-    <p style="font-size:14px;color:var(--ink-3)">Запускается на самой виртуальной машине, от root · в репозитории: <code>scripts/pilot/prepare-ubuntu-node.sh</code> · 277 строк</p>
+    <p style="font-size:14px;color:var(--ink-3)">Запускается на самой виртуальной машине, от root · путь в проекте: <code>scripts/pilot/prepare-ubuntu-node.sh</code> · 277 строк</p>
   </div>
 <pre><code>#!/bin/bash
 # =====================================================================
@@ -1446,7 +1447,7 @@ echo
   <h3 style="margin-top:28px">Install-WazuhAgent.ps1</h3>
   <div class="prose">
     <p>Ставит агент Wazuh. Идемпотентен: на машине с уже установленной нужной версией завершается сразу, поэтому годится и для раскатки групповой политикой. Группу определяет сам по роли машины, если не указана явно.</p>
-    <p style="font-size:14px;color:var(--ink-3)">Запускается на каждом контроллере домена, от администратора · в репозитории: <code>agents/windows/Install-WazuhAgent.ps1</code> · 226 строк</p>
+    <p style="font-size:14px;color:var(--ink-3)">Запускается на каждом контроллере домена, от администратора · путь в проекте: <code>agents/windows/Install-WazuhAgent.ps1</code> · 226 строк</p>
   </div>
 <pre><code>&lt;#
 .SYNOPSIS
@@ -1679,7 +1680,7 @@ try {
   <h3 style="margin-top:28px">Enable-AdAuditPolicy.ps1</h3>
   <div class="prose">
     <p>Включает расширенный аудит, командную строку в событии 4688 и запись блоков PowerShell, увеличивает журнал безопасности. Без этого события не создаются вовсе.</p>
-    <p style="font-size:14px;color:var(--ink-3)">Запускается на каждом контроллере домена, от администратора · в репозитории: <code>scripts/pilot/Enable-AdAuditPolicy.ps1</code> · 251 строк</p>
+    <p style="font-size:14px;color:var(--ink-3)">Запускается на каждом контроллере домена, от администратора · путь в проекте: <code>scripts/pilot/Enable-AdAuditPolicy.ps1</code> · 251 строк</p>
   </div>
 <pre><code>&lt;#
 .SYNOPSIS
@@ -1938,8 +1939,8 @@ Write-Host @"
 
 <footer class="foot">
   <p>
-    Пилот Wazuh · AH Prostory · подробная документация:
-    <span style="font-family: var(--mono)">github.com/IIPOCTO4EJIOBEK/Wazuh</span>
+    Пилот Wazuh · AH Prostory · подробная документация — в комплекте
+    проекта, каталог <span style="font-family: var(--mono)">docs/</span>
   </p>
   <p>
     Ответственные: виртуальные машины — Валерий; Active Directory —

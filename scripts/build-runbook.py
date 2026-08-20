@@ -88,7 +88,8 @@ def build_appendix():
         "  <h2>Приложение: скрипты целиком</h2>",
         '  <div class="prose">',
         "    <p>",
-        "      Здесь те же скрипты, что лежат в репозитории, — полностью. ",
+        "      Здесь те же скрипты, что лежат в комплекте проекта, — ",
+        "      полностью. ",
         "      Чтобы воспользоваться: скопировать, сохранить под указанным ",
         "      именем, для файлов <code>.sh</code> добавить право на ",
         "      выполнение (<code>chmod +x</code>).",
@@ -111,7 +112,7 @@ def build_appendix():
             f'    <p>{html.escape(item["what"])}</p>',
             f'    <p style="font-size:14px;color:var(--ink-3)">'
             f'Запускается {html.escape(item["where"])} · '
-            f'в репозитории: <code>{html.escape(item["path"])}</code> · '
+            f'путь в проекте: <code>{html.escape(item["path"])}</code> · '
             f"{lines} строк</p>",
             "  </div>",
             f"<pre><code>{html.escape(source, quote=False)}</code></pre>",
