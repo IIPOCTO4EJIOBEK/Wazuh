@@ -1,0 +1,30 @@
+---
+- name: Резервное копирование конфигураций менеджера
+  hosts: wazuh_manager
+  gather_facts: true
+  become: true
+  tags: [backup]
+  roles:
+    - role: wazuh_backup
+
+- name: Репозиторий снапшотов индексера
+  hosts: wazuh_indexer
+  gather_facts: true
+  become: true
+  tags: [backup, snapshots]
+  tasks:
+    - name: Монтирование общего хранилища снапшотов
+      ansible.builtin.include_role:
+        name: wazuh_backup
+        tasks_from: snapshot_mount
+
+- name: Регистрация репозитория и политики снапшотов
+  hosts: wazuh_indexer[0]
+  gather_facts: false
+  become: true
+  tags: [backup, snapshots]
+  tasks:
+    - name: Политика снапшотов
+      ansible.builtin.include_role:
+        name: wazuh_backup
+        tasks_from: snapshot_policy

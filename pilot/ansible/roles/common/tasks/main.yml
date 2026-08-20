@@ -1,0 +1,204 @@
+---
+# Общая подготовка узла: репозиторий Wazuh, системные лимиты, /etc/hosts,
+# межсетевой экран. Роль идемпотентна и вызывается перед каждой из
+# остальных ролей.
+
+- name: Синхронизация времени
+  ansible.builtin.package:
+    name: "{{ 'chrony' if ansible_os_family == 'RedHat' else 'chrony' }}"
+    state: present
+
+- name: Служба chrony запущена
+  ansible.builtin.service:
+    name: "{{ 'chronyd' if ansible_os_family == 'RedHat' else 'chrony' }}"
+    state: started
+    enabled: true
+
+- name: Часовой пояс
+  community.general.timezone:
+    name: Europe/Moscow
+
+# ---------------------------------------------------------------------
+# Имена узлов кластера в /etc/hosts.
+# Индексер и менеджер обращаются друг к другу по коротким именам —
+# без записей связь развалится при недоступности DNS, а это ровно тот
+# момент, когда SIEM нужен больше всего.
+# ---------------------------------------------------------------------
+- name: Записи узлов Wazuh в /etc/hosts
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} WAZUH CLUSTER (управляется Ansible)"
+    block: |
+      {% for h in (groups['wazuh_indexer'] + groups['wazuh_manager'] + groups['wazuh_dashboard']) | unique %}
+      {{ hostvars[h].ansible_host }} {{ h }} {{ h }}.{{ wazuh_domain }}
+      {% endfor %}
+      {% if groups['wazuh_lb'] | default([]) | length > 0 %}
+      {{ wazuh_vip_agents }} {{ wazuh_agents_fqdn }}
+      {{ wazuh_vip_dashboard }} {{ wazuh_dashboard_fqdn }}
+      {% else %}
+      {{ hostvars[groups['wazuh_manager'][0]].ansible_host }} {{ wazuh_agents_fqdn }}
+      {{ hostvars[groups['wazuh_dashboard'][0]].ansible_host }} {{ wazuh_dashboard_fqdn }}
+      {% endif %}
+
+# ---------------------------------------------------------------------
+# Репозиторий
+# ---------------------------------------------------------------------
+- name: Пакеты для работы с репозиторием (Debian)
+  ansible.builtin.apt:
+    name: [apt-transport-https, gnupg, curl, ca-certificates, python3-cryptography]
+    state: present
+    update_cache: true
+  when: ansible_os_family == 'Debian'
+
+- name: GPG-ключ Wazuh (Debian)
+  ansible.builtin.apt_key:
+    url: "{{ wazuh_gpg_key_url }}"
+    keyring: /usr/share/keyrings/wazuh.gpg
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: Репозиторий Wazuh (Debian)
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/wazuh.gpg] {{ wazuh_repo_url_apt }} stable main"
+    filename: wazuh
+    state: present
+    update_cache: true
+  when: ansible_os_family == 'Debian'
+
+- name: Репозиторий Wazuh (RedHat)
+  ansible.builtin.yum_repository:
+    name: wazuh
+    description: Wazuh repository
+    baseurl: "{{ wazuh_repo_url_yum }}"
+    gpgkey: "{{ wazuh_gpg_key_url }}"
+    gpgcheck: true
+    enabled: true
+    protect: true
+  when: ansible_os_family == 'RedHat'
+
+- name: Пакеты python для модулей Ansible (RedHat)
+  ansible.builtin.dnf:
+    name: [python3-cryptography, python3-firewall]
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+# ---------------------------------------------------------------------
+# Системные параметры
+# ---------------------------------------------------------------------
+- name: vm.max_map_count для индексера
+  ansible.posix.sysctl:
+    name: vm.max_map_count
+    value: "262144"
+    sysctl_file: /etc/sysctl.d/99-wazuh.conf
+    state: present
+    reload: true
+  when: "'wazuh_indexer' in group_names"
+
+- name: Отключение подкачки на узлах индексера
+  ansible.posix.sysctl:
+    name: vm.swappiness
+    value: "1"
+    sysctl_file: /etc/sysctl.d/99-wazuh.conf
+    state: present
+    reload: true
+  when: "'wazuh_indexer' in group_names"
+
+- name: Swap выключен (иначе GC индексера уходит в диск)
+  ansible.builtin.command: swapoff -a
+  when: "'wazuh_indexer' in group_names and ansible_swaptotal_mb | int > 0"
+  changed_when: true
+
+- name: Swap убран из fstab
+  ansible.posix.mount:
+    path: none
+    src: none
+    fstype: swap
+    state: absent
+  when: "'wazuh_indexer' in group_names"
+
+- name: Лимиты дескрипторов и памяти
+  ansible.builtin.copy:
+    dest: /etc/security/limits.d/99-wazuh.conf
+    mode: "0644"
+    content: |
+      # Управляется Ansible
+      *  soft  nofile  65536
+      *  hard  nofile  65536
+      *  soft  nproc   8192
+      *  hard  nproc   8192
+      *  soft  memlock unlimited
+      *  hard  memlock unlimited
+
+# ---------------------------------------------------------------------
+# Межсетевой экран.
+# Правило: наружу открыт только тот порт, который нужен соседям по роли.
+# ---------------------------------------------------------------------
+- name: Набор портов узла
+  ansible.builtin.set_fact:
+    node_ports: >-
+      {{
+        ( [indexer_http_port, indexer_transport_port] if 'wazuh_indexer' in group_names else [] )
+        + ( [manager_agent_port, manager_enrollment_port, manager_cluster_port, manager_api_port]
+            if 'wazuh_manager' in group_names else [] )
+        + ( [dashboard_port] if 'wazuh_dashboard' in group_names else [] )
+        + ( [manager_agent_port, manager_enrollment_port, manager_api_port, dashboard_port, 8404]
+            if 'wazuh_lb' in group_names else [] )
+      }}
+
+- name: ufw установлен (Debian)
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: Разрешить SSH (Debian)
+  community.general.ufw:
+    rule: allow
+    port: "22"
+    proto: tcp
+  when: ansible_os_family == 'Debian'
+
+- name: Разрешить порты роли из доверенных сетей (Debian)
+  community.general.ufw:
+    rule: allow
+    src: "{{ item.0 }}"
+    port: "{{ item.1 }}"
+    proto: tcp
+  loop: "{{ wazuh_trusted_networks | product(node_ports) | list }}"
+  when: ansible_os_family == 'Debian'
+
+- name: Разрешить VRRP между балансировщиками (Debian)
+  community.general.ufw:
+    rule: allow
+    proto: "112"
+    src: "{{ hostvars[item].ansible_host }}"
+  loop: "{{ groups['wazuh_lb'] | default([]) }}"
+  when:
+    - ansible_os_family == 'Debian'
+    - "'wazuh_lb' in group_names"
+
+- name: Включить ufw с политикой deny на входящие (Debian)
+  community.general.ufw:
+    state: enabled
+    policy: deny
+    direction: incoming
+  when: ansible_os_family == 'Debian'
+
+- name: Разрешить порты роли (RedHat)
+  ansible.posix.firewalld:
+    port: "{{ item }}/tcp"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ node_ports }}"
+  when: ansible_os_family == 'RedHat'
+
+- name: Разрешить VRRP (RedHat)
+  ansible.posix.firewalld:
+    rich_rule: 'rule protocol value="vrrp" accept'
+    permanent: true
+    immediate: true
+    state: enabled
+  when:
+    - ansible_os_family == 'RedHat'
+    - "'wazuh_lb' in group_names"

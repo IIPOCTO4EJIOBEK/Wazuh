@@ -1,0 +1,6 @@
+---
+- name: restart wazuh-dashboard
+  ansible.builtin.service:
+    name: wazuh-dashboard
+    state: restarted
+  failed_when: false

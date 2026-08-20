@@ -1,0 +1,92 @@
+---
+# Проверки до установки. Задача — упасть здесь, а не на середине
+# раскатки кластера.
+
+- name: Предполётная проверка узлов Wazuh
+  hosts: wazuh_indexer:wazuh_manager:wazuh_dashboard:wazuh_lb
+  gather_facts: true
+  any_errors_fatal: true
+  tags: [preflight]
+
+  vars:
+    min_ram_mb:
+      wazuh_indexer: 15000
+      wazuh_manager: 7500
+      wazuh_dashboard: 3800
+      wazuh_lb: 1800
+    min_free_root_gb: 20
+
+  tasks:
+
+    - name: Поддерживаемая ОС
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family in ['Debian', 'RedHat']
+          - (ansible_distribution == 'Ubuntu' and ansible_distribution_major_version | int >= 22)
+            or (ansible_os_family == 'RedHat' and ansible_distribution_major_version | int >= 8)
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          не поддерживается. Нужен Ubuntu 22.04/24.04 или RHEL-совместимая 8/9.
+
+    - name: Достаточно оперативной памяти
+      ansible.builtin.assert:
+        that:
+          - ansible_memtotal_mb >= min_ram_mb[group_names | select('in', min_ram_mb.keys()) | first]
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ ansible_memtotal_mb }} МБ ОЗУ, требуется не меньше
+          {{ min_ram_mb[group_names | select('in', min_ram_mb.keys()) | first] }} МБ.
+      when: group_names | select('in', min_ram_mb.keys()) | list | length > 0
+
+    - name: Достаточно места на корневом разделе
+      ansible.builtin.assert:
+        that:
+          - (ansible_mounts | selectattr('mount', 'equalto', '/') | first).size_available
+            > (min_free_root_gb * 1024 * 1024 * 1024)
+        fail_msg: "{{ inventory_hostname }}: на / меньше {{ min_free_root_gb }} ГБ свободного места."
+
+    - name: Отдельный том под данные индексера
+      ansible.builtin.assert:
+        that:
+          - ansible_mounts | selectattr('mount', 'equalto', indexer_path_data) | list | length > 0
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ indexer_path_data }} не является отдельным томом.
+          Индексер обязан писать на отдельный диск, иначе переполнение данных
+          останавливает всю операционную систему.
+      when: "'wazuh_indexer' in group_names"
+
+    - name: Часы синхронизированы
+      ansible.builtin.command: timedatectl show -p NTPSynchronized --value
+      register: ntp_sync
+      changed_when: false
+      failed_when: false
+
+    - name: Расхождение часов ломает корреляцию событий
+      ansible.builtin.assert:
+        that: ntp_sync.stdout | trim == 'yes'
+        fail_msg: >-
+          {{ inventory_hostname }}: NTP не синхронизирован. События с разных узлов
+          лягут в индекс с неверными метками времени, корреляция работать не будет.
+
+    - name: Проверка доступности репозитория Wazuh
+      ansible.builtin.uri:
+        url: "{{ wazuh_gpg_key_url }}"
+        method: HEAD
+        timeout: 20
+      register: repo_check
+      failed_when: repo_check.status != 200
+      when: not (offline_install | default(false))
+
+    - name: Проверка сетевой доступности индексера с менеджеров
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[item].ansible_host }}"
+        port: 22
+        timeout: 10
+      loop: "{{ groups['wazuh_indexer'] }}"
+      when: "'wazuh_manager' in group_names"
+
+    - name: Итог
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} ({{ ansible_host | default('n/a') }}):
+          {{ ansible_distribution }} {{ ansible_distribution_version }},
+          {{ ansible_processor_vcpus }} vCPU, {{ ansible_memtotal_mb }} МБ ОЗУ — проверки пройдены.

@@ -1,0 +1,65 @@
+<!--
+  Агент Wazuh на {{ inventory_hostname }}. Управляется Ansible.
+
+  Здесь только то, что относится к связи с менеджером. Всё, что
+  агент собирает, задаётся централизованно через группы агентов
+  (rules/agent-groups/*.conf) и приезжает с менеджера — иначе при
+  трёхстах агентах любая правка набора журналов превращается в
+  трёхсоткратный обход машин.
+-->
+<ossec_config>
+
+  <client>
+    <server>
+      <address>{{ wazuh_vip_agents }}</address>
+      <port>{{ manager_agent_port }}</port>
+      <protocol>{{ manager_protocol }}</protocol>
+    </server>
+
+    <!-- Прямые адреса менеджеров как запасной вариант: если откажет
+         сам балансировщик, агент достучится до менеджера напрямую. -->
+{% for h in groups['wazuh_manager'] %}
+    <server>
+      <address>{{ hostvars[h].ansible_host }}</address>
+      <port>{{ manager_agent_port }}</port>
+      <protocol>{{ manager_protocol }}</protocol>
+    </server>
+{% endfor %}
+
+    <config-profile>{{ ansible_os_family | lower }}, {{ ansible_distribution | lower }}, {{ ansible_distribution | lower }}{{ ansible_distribution_major_version }}</config-profile>
+    <notify_time>30</notify_time>
+    <time-reconnect>90</time-reconnect>
+    <auto_restart>yes</auto_restart>
+    <crypto_method>aes</crypto_method>
+  </client>
+
+  <client_buffer>
+    <disabled>no</disabled>
+    <queue_size>10000</queue_size>
+    <events_per_second>500</events_per_second>
+  </client_buffer>
+
+  <!-- Регистрация. Пароль лежит в authd.pass с правами 0640. -->
+  <enrollment>
+    <enabled>yes</enabled>
+    <manager_address>{{ wazuh_vip_agents }}</manager_address>
+    <port>{{ manager_enrollment_port }}</port>
+    <agent_name>{{ inventory_hostname }}</agent_name>
+    <groups>{{ wazuh_agent_groups | default('default') }}</groups>
+    <authorization_pass_path>etc/authd.pass</authorization_pass_path>
+    <auto_method>no</auto_method>
+    <delay_after_enrollment>20</delay_after_enrollment>
+  </enrollment>
+
+  <!-- Активное реагирование выполняется на стороне агента. -->
+  <active-response>
+    <disabled>no</disabled>
+    <ca_store>etc/wpk_root.pem</ca_store>
+    <ca_verification>yes</ca_verification>
+  </active-response>
+
+  <logging>
+    <log_format>plain</log_format>
+  </logging>
+
+</ossec_config>

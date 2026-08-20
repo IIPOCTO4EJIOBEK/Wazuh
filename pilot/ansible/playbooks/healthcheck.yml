@@ -1,0 +1,148 @@
+---
+# Приёмочная проверка. Запускается после установки и далее еженедельно.
+#
+#   ansible-playbook playbooks/healthcheck.yml --ask-vault-pass
+
+- name: Состояние кластера индексера
+  hosts: wazuh_indexer[0]
+  gather_facts: false
+  become: true
+  tags: [healthcheck]
+  tasks:
+
+    - name: Запрос _cluster/health
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_cluster/health"
+        user: admin
+        password: "{{ vault_indexer_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        return_content: true
+      register: cluster_health
+
+    - name: Кластер зелёный и в нём все узлы
+      ansible.builtin.assert:
+        that:
+          - cluster_health.json.status == 'green'
+          - cluster_health.json.number_of_nodes == groups['wazuh_indexer'] | length
+        fail_msg: >-
+          Индексер: статус {{ cluster_health.json.status }},
+          узлов {{ cluster_health.json.number_of_nodes }}
+          из {{ groups['wazuh_indexer'] | length }}.
+        success_msg: >-
+          Индексер: green, узлов {{ cluster_health.json.number_of_nodes }},
+          активных шардов {{ cluster_health.json.active_shards }}.
+
+    - name: Свежие алерты за последний час
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}:{{ indexer_http_port }}/wazuh-alerts-*/_count"
+        method: POST
+        user: admin
+        password: "{{ vault_indexer_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          query:
+            range:
+              "@timestamp":
+                gte: "now-1h"
+      register: recent_alerts
+
+    - name: Поток событий не прервался
+      ansible.builtin.assert:
+        that: recent_alerts.json.count | int > 0
+        fail_msg: >-
+          За последний час в wazuh-alerts-* нет ни одного документа.
+          Проверить filebeat на менеджерах и приём на 1514.
+        success_msg: "Алертов за час: {{ recent_alerts.json.count }}."
+
+- name: Состояние кластера менеджеров
+  hosts: wazuh_manager_master
+  gather_facts: false
+  become: true
+  tags: [healthcheck]
+  tasks:
+
+    - name: Токен Wazuh API
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}:{{ manager_api_port }}/security/user/authenticate"
+        method: POST
+        user: wazuh
+        password: "{{ vault_wazuh_api_password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: api_token
+
+    - name: Узлы кластера менеджеров
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}:{{ manager_api_port }}/cluster/healthcheck"
+        headers:
+          Authorization: "Bearer {{ api_token.json.data.token }}"
+        validate_certs: false
+      register: mgr_health
+      when: groups['wazuh_manager'] | length > 1
+
+    - name: Оба менеджера на связи
+      ansible.builtin.assert:
+        that: mgr_health.json.data.affected_items | length == groups['wazuh_manager'] | length
+        fail_msg: >-
+          В кластере менеджеров {{ mgr_health.json.data.affected_items | length }} узлов
+          из {{ groups['wazuh_manager'] | length }}.
+      when: groups['wazuh_manager'] | length > 1
+
+    - name: Сводка по агентам
+      ansible.builtin.uri:
+        url: "https://{{ ansible_host }}:{{ manager_api_port }}/agents/summary/status"
+        headers:
+          Authorization: "Bearer {{ api_token.json.data.token }}"
+        validate_certs: false
+      register: agents_summary
+
+    - name: Отключённых агентов не больше 5 процентов
+      ansible.builtin.assert:
+        that:
+          - (agents_summary.json.data.connection.disconnected | int)
+            <= ((agents_summary.json.data.connection.active | int)
+                + (agents_summary.json.data.connection.disconnected | int)
+                + (agents_summary.json.data.connection.never_connected | int)) * 0.05
+        fail_msg: >-
+          Отключено {{ agents_summary.json.data.connection.disconnected }} агентов
+          из {{ agents_summary.json.data.connection.active + agents_summary.json.data.connection.disconnected + agents_summary.json.data.connection.never_connected }}.
+        success_msg: >-
+          Агенты: активных {{ agents_summary.json.data.connection.active }},
+          отключённых {{ agents_summary.json.data.connection.disconnected }},
+          никогда не подключались {{ agents_summary.json.data.connection.never_connected }}.
+
+- name: Состояние балансировщиков
+  hosts: wazuh_lb
+  gather_facts: false
+  become: true
+  tags: [healthcheck]
+  tasks:
+
+    - name: Службы запущены
+      ansible.builtin.service_facts:
+
+    - name: HAProxy и keepalived активны
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['haproxy.service'].state == 'running'
+          - ansible_facts.services['keepalived.service'].state == 'running'
+        fail_msg: "{{ inventory_hostname }}: балансировщик не в рабочем состоянии."
+
+    - name: Где находятся VIP
+      ansible.builtin.shell: |
+        set -o pipefail
+        ip -4 -o addr show | awk '{print $4}' | cut -d/ -f1
+      args:
+        executable: /bin/bash
+      register: node_addrs
+      changed_when: false
+
+    - name: Отчёт по VIP
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          VIP агентов {{ 'здесь' if wazuh_vip_agents in node_addrs.stdout_lines else 'на соседе' }},
+          VIP дашборда {{ 'здесь' if wazuh_vip_dashboard in node_addrs.stdout_lines else 'на соседе' }}.

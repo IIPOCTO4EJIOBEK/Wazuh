@@ -1,0 +1,55 @@
+---
+# Группы агентов, для которых раскладывается agent.conf.
+# Каждой соответствует файл rules/agent-groups/<имя>.conf.
+wazuh_agent_group_list:
+  - default
+  - linux
+  - windows
+  - bitrix-web
+  - database
+  - dmz
+  - asterisk
+  - dc
+  - hyperv
+  - mssql
+  - workstation
+
+# Самопроверка правил после раскладки.
+wazuh_rules_selftest: true
+
+# Образцы событий и правила, которые они обязаны поднять.
+# Пополнять при каждом новом собственном правиле — это дешёвый регресс-тест.
+wazuh_rule_selftest_cases:
+  - name: "Отказ в доступе к форме заявки"
+    location: "/home/bitrix/log/zayavka.log"
+    expect_rule: "100211"
+    sample: >-
+      zayavka: request=REQ-2026-0042 user=ivanov ip=10.0.1.55
+      action=create result=denied
+
+  - name: "Ошибка синхронизации с ServiceDesk Plus"
+    location: "/home/bitrix/log/sdp-sync.log"
+    expect_rule: "100222"
+    sample: "sdp-sync: status=503 requests=0 errors=14"
+
+  - name: "Неудачное резервное копирование"
+    location: "/var/log/wazuh-backup.log"
+    expect_rule: "100442"
+    sample: "wazuh-backup: job=config target=gdrive status=error size=0"
+
+  - name: "Отказ HAProxy в обслуживании бэкенда"
+    location: "/var/log/haproxy.log"
+    expect_rule: "100420"
+    sample: >-
+      Aug  9 12:00:01 haproxy-01 haproxy[1234]: Server bitrix-web/web02 is DOWN,
+      reason: Layer4 connection problem, check duration: 2001ms.
+      1 active and 0 backup servers left. 12 sessions active.
+
+  - name: "Сбой дискового тома на гипервизоре"
+    location: "EventChannel"
+    expect_rule: "100410"
+    sample: >-
+      {"win":{"system":{"providerName":"disk","eventID":"153","level":"3",
+      "channel":"System","computer":"pdc-hv0.ahprostory.ru","severityValue":"WARNING"},
+      "eventdata":{"data":"The IO operation at logical block address 0x0 for Disk 4
+      was retried."}}}

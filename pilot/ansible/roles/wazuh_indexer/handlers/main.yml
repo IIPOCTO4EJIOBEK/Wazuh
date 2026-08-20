@@ -1,0 +1,92 @@
+---
+# Перезапуск узла индексера — не просто systemctl restart.
+# Порядок важен: без запрета перебалансировки кластер начнёт копировать
+# шарды ушедшего узла на соседей и вернёт их обратно через минуту.
+# На объёмах в сотни гигабайт это часы лишней нагрузки на сеть и диски.
+#
+# Обработчики с одинаковым listen выполняются по порядку сверху вниз,
+# а при serial: 1 — по одному узлу за раз, то есть кластер не теряет кворум.
+
+- name: Проверка, установлена ли служба индексера
+  ansible.builtin.stat:
+    path: /usr/lib/systemd/system/wazuh-indexer.service
+  register: idx_unit
+  listen: restart wazuh-indexer
+
+- name: Запрет перебалансировки на время перезапуска
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_cluster/settings"
+    method: PUT
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      persistent:
+        cluster.routing.allocation.enable: "primaries"
+    status_code: [200]
+  failed_when: false
+  when: idx_unit.stat.exists
+  listen: restart wazuh-indexer
+
+- name: Сброс несохранённых операций на диск
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_flush"
+    method: POST
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [200, 409]
+  failed_when: false
+  when: idx_unit.stat.exists
+  listen: restart wazuh-indexer
+
+- name: Перезапуск службы
+  ansible.builtin.service:
+    name: wazuh-indexer
+    state: restarted
+  when: idx_unit.stat.exists
+  listen: restart wazuh-indexer
+
+- name: Ожидание готовности узла
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ indexer_http_port }}"
+    delay: 10
+    timeout: 300
+  when: idx_unit.stat.exists
+  listen: restart wazuh-indexer
+
+- name: Возврат перебалансировки
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_cluster/settings"
+    method: PUT
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      persistent:
+        cluster.routing.allocation.enable: null
+    status_code: [200]
+  failed_when: false
+  when: idx_unit.stat.exists
+  listen: restart wazuh-indexer
+
+- name: Ожидание, пока кластер вернётся в жёлтый или зелёный статус
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_cluster/health?wait_for_status=yellow&timeout=120s"
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: idx_health
+  retries: 10
+  delay: 20
+  until: idx_health.status == 200 and idx_health.json.status in ['yellow', 'green']
+  failed_when: false
+  when: idx_unit.stat.exists
+  listen: restart wazuh-indexer

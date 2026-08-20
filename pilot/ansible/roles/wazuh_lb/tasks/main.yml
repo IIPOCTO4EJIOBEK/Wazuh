@@ -1,0 +1,88 @@
+---
+# Балансировщик приёма агентов и доступа к дашборду.
+#
+# Почему это отдельный слой, а не DNS с двумя записями: агент, который
+# получил в ответ адрес выключенного менеджера, не переключается сам —
+# он пытается достучаться и молчит. Для системы, которая должна
+# заметить атаку, «молчит» — недопустимое поведение.
+
+- name: Установка HAProxy и keepalived
+  ansible.builtin.package:
+    name:
+      - haproxy
+      - keepalived
+      - socat
+    state: present
+
+# Балансировщик слушает адреса, которые в момент старта могут ещё не
+# быть подняты keepalived. Без этого параметра haproxy не стартует.
+- name: Разрешение привязки к неподнятым адресам
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_nonlocal_bind
+    value: "1"
+    sysctl_file: /etc/sysctl.d/99-wazuh-lb.conf
+    state: present
+    reload: true
+
+- name: Пересылка пакетов не нужна
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "0"
+    sysctl_file: /etc/sysctl.d/99-wazuh-lb.conf
+    state: present
+    reload: true
+
+- name: Конфигурация HAProxy
+  ansible.builtin.template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+    validate: "haproxy -c -f %s"
+  notify: reload haproxy
+
+- name: Скрипт проверки состояния для keepalived
+  ansible.builtin.template:
+    src: check-haproxy.sh.j2
+    dest: /etc/keepalived/check-haproxy.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Конфигурация keepalived
+  ansible.builtin.template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  notify: restart keepalived
+
+- name: Службы запущены
+  ansible.builtin.service:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - haproxy
+    - keepalived
+
+- name: Ротация журнала HAProxy
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/haproxy-wazuh
+    mode: "0644"
+    content: |
+      /var/log/haproxy.log {
+          daily
+          rotate 30
+          compress
+          delaycompress
+          missingok
+          notifempty
+          postrotate
+              systemctl reload rsyslog >/dev/null 2>&1 || true
+          endscript
+      }

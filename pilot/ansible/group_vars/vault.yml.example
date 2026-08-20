@@ -1,0 +1,49 @@
+---
+# =====================================================================
+#  Секреты стенда Wazuh.
+#
+#  Порядок работы:
+#     cp group_vars/vault.yml.example group_vars/vault.yml
+#     # заполнить значения
+#     ansible-vault encrypt group_vars/vault.yml
+#
+#  group_vars/vault.yml добавлен в .gitignore — в репозиторий он не
+#  попадает ни в открытом, ни в зашифрованном виде.
+#
+#  Требования к паролям индексера: не короче 12 символов, обязательно
+#  строчные, заглавные, цифра и спецсимвол. Символы " ' \ $ ` в паролях
+#  не использовать — они ломают Java-конфиги и filebeat keystore.
+# =====================================================================
+
+# --- Учётные записи OpenSearch -------------------------------------
+vault_indexer_admin_password: "СМЕНИТЬ_Admin1!"        # admin, полный доступ
+vault_indexer_kibanaserver_password: "СМЕНИТЬ_Kibana1!" # служебная, дашборд → индексер
+vault_indexer_filebeat_password: "СМЕНИТЬ_Filebeat1!"   # менеджер → индексер (запись алертов)
+vault_indexer_snapshot_password: "СМЕНИТЬ_Snapshot1!"   # роль снапшотов
+vault_indexer_readonly_password: "СМЕНИТЬ_Readonly1!"   # аудиторы, только чтение
+
+# --- Wazuh API -----------------------------------------------------
+vault_wazuh_api_password: "СМЕНИТЬ_WazuhApi1!"      # пользователь wazuh
+vault_wazuh_wui_password: "СМЕНИТЬ_WazuhWui1!"      # пользователь wazuh-wui (дашборд → API)
+
+# --- Кластер менеджеров ---------------------------------------------
+# Ровно 32 символа. Сгенерировать: openssl rand -hex 16
+vault_manager_cluster_key: "00000000000000000000000000000000"
+
+# --- Регистрация агентов --------------------------------------------
+# Общий пароль authd. Сгенерировать: openssl rand -base64 24
+vault_agent_enrollment_password: "СМЕНИТЬ_EnrollPass"
+
+# --- ServiceDesk Plus ------------------------------------------------
+vault_servicedesk_authtoken: "СМЕНИТЬ_SDP_AUTHTOKEN"
+
+# --- Zabbix ----------------------------------------------------------
+vault_zabbix_api_token: ""      # не обязателен: sender работает по trapper
+
+# --- Telegram --------------------------------------------------------
+vault_telegram_bot_token: ""
+vault_telegram_chat_id: ""
+
+# --- SMTP ------------------------------------------------------------
+vault_smtp_user: ""
+vault_smtp_password: ""

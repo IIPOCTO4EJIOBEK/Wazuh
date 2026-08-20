@@ -1,0 +1,235 @@
+<!--
+  =====================================================================
+   Инфраструктура: гипервизоры, СХД, балансировщики, СУБД, резервное
+   копирование, сама платформа Zabbix.
+   Диапазон идентификаторов: 100400–100499.
+
+   Отдельного пояснения заслуживают правила 100410–100414.
+   09.06.2026 на pdc-hv0 (10.2.27.118) произошёл сбой массива FUJITSU
+   ETERNUS_DXL: в 17:37 ошибка 0x80000011 на HarddiskVolume10, через
+   47 секунд перезагрузка сервера, в 17:59 повреждение файловой системы
+   и потеря части отложенной записи. Ни одно из этих событий не подняло
+   тревогу вовремя. Правила ниже закрывают именно эту последовательность:
+   первое же событие уровня диска попадает в SIEM, а серия событий за
+   короткое время трактуется как отказ хранилища.
+  =====================================================================
+-->
+
+<group name="ahp,ahp_infra,">
+
+  <!-- ================================================================
+       Дисковая подсистема и СХД (Windows, канал System)
+       ================================================================ -->
+
+  <rule id="100410" level="10">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.providerName" type="pcre2">^(disk|Disk|storahci|stornvme|iaStorA|mpio|msdsm|vhdmp)$</field>
+    <field name="win.system.eventID" type="pcre2">^(7|11|15|51|55|129|153|157)$</field>
+    <description>Дисковая подсистема $(win.system.computer): событие $(win.system.eventID) от $(win.system.providerName)</description>
+    <mitre>
+      <id>T1499</id>
+    </mitre>
+    <group>hardware_error,storage,</group>
+  </rule>
+
+  <!-- Повреждение файловой системы и отложенная запись, не дошедшая до
+       диска: ровно те два события, что были в инциденте 09.06.2026. -->
+  <rule id="100411" level="14">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^(55|140)$</field>
+    <description>Повреждение файловой системы или сбой отложенной записи на $(win.system.computer) — возможна потеря данных</description>
+    <group>hardware_error,storage,data_loss,</group>
+  </rule>
+
+  <rule id="100412" level="14" frequency="5" timeframe="300">
+    <if_matched_sid>100410</if_matched_sid>
+    <same_field>win.system.computer</same_field>
+    <description>Отказ хранилища на $(agent.name): пять и более дисковых событий за 5 минут</description>
+    <group>hardware_error,storage,</group>
+  </rule>
+
+  <!-- Неожиданная перезагрузка сервера. Отдельно, потому что в
+       инциденте она была следствием, а выглядела как причина. -->
+  <rule id="100413" level="12">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.eventID" type="pcre2">^(41|6008|1001)$</field>
+    <description>Внеплановая перезагрузка $(win.system.computer)</description>
+    <group>system_shutdown,</group>
+  </rule>
+
+  <!-- Дисковое событие, а следом перезагрузка того же узла: это уже не
+       два независимых сбоя, а отказ хранилища, уронивший сервер. -->
+  <rule id="100414" level="15" frequency="3" timeframe="600">
+    <if_sid>100413</if_sid>
+    <if_matched_sid>100410</if_matched_sid>
+    <same_field>win.system.computer</same_field>
+    <description>Отказ хранилища привёл к перезагрузке $(agent.name) — сценарий инцидента 09.06.2026</description>
+    <group>hardware_error,storage,data_loss,</group>
+  </rule>
+
+  <!-- Hyper-V: недоступность виртуальных дисков и остановка машин -->
+  <rule id="100415" level="13">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.providerName" type="pcre2">(?i)hyper-v</field>
+    <field name="win.system.level" type="pcre2">^2$</field>
+    <description>Hyper-V $(win.system.computer): ошибка виртуализации</description>
+    <group>hypervisor,</group>
+  </rule>
+
+  <!-- ================================================================
+       Балансировщик HAProxy (10.0.1.50)
+       ================================================================ -->
+
+  <rule id="100420" level="10">
+    <decoded_as>haproxy</decoded_as>
+    <field name="haproxy.state">^DOWN$</field>
+    <description>HAProxy: сервер $(haproxy.server) выведен из балансировки</description>
+    <group>service_availability,</group>
+  </rule>
+
+  <rule id="100421" level="5">
+    <decoded_as>haproxy</decoded_as>
+    <field name="haproxy.state">^UP$</field>
+    <description>HAProxy: сервер $(haproxy.server) вернулся в балансировку</description>
+    <group>service_availability,</group>
+  </rule>
+
+  <!-- Оба узла портала недоступны — это уже простой сервиса, а не
+       деградация. -->
+  <rule id="100422" level="14" frequency="2" timeframe="120">
+    <if_matched_sid>100420</if_matched_sid>
+    <different_field>haproxy.server</different_field>
+    <description>HAProxy: из балансировки выведены оба узла портала — сервис недоступен</description>
+    <group>service_availability,</group>
+  </rule>
+
+  <!-- Частое переключение вверх-вниз: сеть или бэкенд нестабильны,
+       для пользователя это выглядит как случайные ошибки. -->
+  <rule id="100423" level="12" frequency="6" timeframe="600">
+    <if_matched_sid>100421</if_matched_sid>
+    <description>HAProxy: сервер портала переключался шесть и более раз за 10 минут</description>
+    <group>service_availability,</group>
+  </rule>
+
+  <!-- ================================================================
+       MSSQL на PDC-DB1 (10.1.20.41)
+       ================================================================ -->
+
+  <rule id="100430" level="7">
+    <decoded_as>json</decoded_as>
+    <field name="win.system.providerName" type="pcre2">(?i)mssql</field>
+    <field name="win.system.eventID" type="pcre2">^18456$</field>
+    <description>MSSQL: неудачная попытка входа на $(win.system.computer)</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failed,database,</group>
+  </rule>
+
+  <rule id="100431" level="13" frequency="10" timeframe="180">
+    <if_matched_sid>100430</if_matched_sid>
+    <description>MSSQL: подбор пароля — десять неудачных входов за три минуты</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failures,database,</group>
+  </rule>
+
+  <!-- Включение xp_cmdshell — выполнение команд ОС из СУБД. В штатной
+       работе портала и 1С этого не требуется. -->
+  <rule id="100432" level="14">
+    <decoded_as>json</decoded_as>
+    <field name="win.eventdata.commandLine" type="pcre2">(?i)(xp_cmdshell|sp_configure.+xp_cmdshell|Ole\s+Automation\s+Procedures)</field>
+    <description>MSSQL: попытка выполнения команд операционной системы из СУБД</description>
+    <mitre>
+      <id>T1505.001</id>
+    </mitre>
+    <group>database,attack,</group>
+  </rule>
+
+  <!-- ================================================================
+       Резервное копирование
+       ================================================================ -->
+
+  <rule id="100440" level="0">
+    <decoded_as>wazuh-backup</decoded_as>
+    <description>Резервное копирование: событие</description>
+  </rule>
+
+  <rule id="100441" level="3">
+    <if_sid>100440</if_sid>
+    <field name="backup.status">^ok$</field>
+    <description>Резервная копия $(backup.job) выгружена в $(backup.target), объём $(backup.size)</description>
+    <group>backup,</group>
+  </rule>
+
+  <rule id="100442" level="12">
+    <if_sid>100440</if_sid>
+    <field name="backup.status" type="pcre2">^(error|failed)$</field>
+    <description>Резервное копирование $(backup.job) не выполнено, назначение $(backup.target)</description>
+    <group>backup,</group>
+  </rule>
+
+  <!-- Две неудачи подряд — резервной копии за сутки нет вообще. -->
+  <rule id="100443" level="14" frequency="2" timeframe="172800">
+    <if_matched_sid>100442</if_matched_sid>
+    <description>Резервное копирование не выполняется двое суток подряд</description>
+    <group>backup,</group>
+  </rule>
+
+  <!-- ================================================================
+       Состояние самого кластера Wazuh и индексера
+       ================================================================ -->
+
+  <rule id="100450" level="12">
+    <match type="pcre2">(wazuh-indexer|wazuh-manager|filebeat)\.service.*(Failed|failed to start|entered failed state)</match>
+    <description>Служба платформы Wazuh не запустилась на $(agent.name)</description>
+    <group>wazuh_availability,</group>
+  </rule>
+
+  <rule id="100451" level="12">
+    <match type="pcre2">(?i)(cluster health status changed from \[GREEN\] to \[RED\]|all shards failed|high disk watermark.*exceeded)</match>
+    <description>Индексер Wazuh: деградация кластера или переполнение диска</description>
+    <group>wazuh_availability,</group>
+  </rule>
+
+  <!-- Переполнение очереди analysisd означает, что события отбрасываются:
+       на графиках это выглядит как «стало тихо». -->
+  <rule id="100452" level="13">
+    <match type="pcre2">(?i)(queue.*is full|Discarding event|Unable to send message to the queue)</match>
+    <description>Wazuh: очередь событий переполнена, события отбрасываются</description>
+    <group>wazuh_availability,</group>
+  </rule>
+
+  <!-- ================================================================
+       Zabbix (10.5.2.74) — вторая система мониторинга.
+       Тишина в Zabbix и тишина в Wazuh одновременно — признак, что
+       выключили не отдельный агент, а весь сегмент мониторинга.
+       ================================================================ -->
+
+  <rule id="100460" level="10">
+    <match type="pcre2">(?i)zabbix_server.*(cannot connect to database|housekeeper.*failed|history syncer.*more than)</match>
+    <description>Zabbix: сбой сервера мониторинга</description>
+    <group>service_availability,</group>
+  </rule>
+
+  <!-- ================================================================
+       Сетевое оборудование и VPN (syslog от NPM и шлюзов)
+       ================================================================ -->
+
+  <rule id="100470" level="12">
+    <if_sid>4151</if_sid>
+    <description>Межсетевой экран: заблокировано соединение с $(srcip)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>firewall,</group>
+  </rule>
+
+  <rule id="100471" level="12">
+    <match type="pcre2">(?i)(nginx|npm).*(client sent invalid|SSL_do_handshake\(\) failed|too many open files)</match>
+    <description>Обратный прокси: ошибки обработки соединений</description>
+    <group>service_availability,web,</group>
+  </rule>
+
+</group>

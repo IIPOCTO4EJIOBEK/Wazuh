@@ -1,0 +1,92 @@
+#=====================================================================
+#  keepalived на {{ inventory_hostname }} ({{ keepalived_state }}).
+#  Управляется Ansible.
+#
+#  Два независимых виртуальных адреса:
+#    {{ wazuh_vip_agents }}    приём агентов и Wazuh API
+#    {{ wazuh_vip_dashboard }}    дашборд
+#
+#  Они разделены намеренно: авария в интерфейсе не должна утаскивать
+#  за собой приём событий от агентов. Сбор данных важнее их показа.
+#=====================================================================
+
+global_defs {
+    router_id {{ inventory_hostname }}
+    enable_script_security
+    script_user root
+    # Уведомления keepalived уходят в syslog, оттуда их читает агент
+    # Wazuh на самом балансировщике — переключение VIP видно в SIEM.
+    vrrp_skip_check_adv_addr
+}
+
+# Проверка живости балансировщика. Если haproxy не отвечает, узел
+# снижает приоритет и отдаёт адреса соседу.
+vrrp_script check_haproxy {
+    script "/etc/keepalived/check-haproxy.sh"
+    interval 2
+    timeout 3
+    fall 2
+    rise 2
+    weight -60
+}
+
+vrrp_instance WAZUH_AGENTS {
+    state {{ keepalived_state }}
+    interface {{ wazuh_vrrp_interface }}
+    virtual_router_id {{ wazuh_vrrp_id_agents }}
+    priority {{ keepalived_priority }}
+    advert_int 1
+
+    # Возврат адреса на восстановившийся узел не нужен: лишнее
+    # переключение = ещё один разрыв соединений агентов.
+    nopreempt
+
+    authentication {
+        auth_type PASS
+        auth_pass {{ (vault_manager_cluster_key | default('wazuhvrrp'))[:8] }}
+    }
+
+    unicast_src_ip {{ ansible_host }}
+    unicast_peer {
+{% for h in groups['wazuh_lb'] if h != inventory_hostname %}
+        {{ hostvars[h].ansible_host }}
+{% endfor %}
+    }
+
+    virtual_ipaddress {
+        {{ wazuh_vip_agents }}/24 dev {{ wazuh_vrrp_interface }}
+    }
+
+    track_script {
+        check_haproxy
+    }
+}
+
+vrrp_instance WAZUH_DASHBOARD {
+    state {{ keepalived_state }}
+    interface {{ wazuh_vrrp_interface }}
+    virtual_router_id {{ wazuh_vrrp_id_dashboard }}
+    priority {{ keepalived_priority }}
+    advert_int 1
+    nopreempt
+
+    authentication {
+        auth_type PASS
+        auth_pass {{ (vault_manager_cluster_key | default('wazuhvrrp'))[:8] }}
+    }
+
+    unicast_src_ip {{ ansible_host }}
+    unicast_peer {
+{% for h in groups['wazuh_lb'] if h != inventory_hostname %}
+        {{ hostvars[h].ansible_host }}
+{% endfor %}
+    }
+
+    virtual_ipaddress {
+        {{ wazuh_vip_dashboard }}/24 dev {{ wazuh_vrrp_interface }}
+    }
+
+    track_script {
+        check_haproxy
+    }
+}

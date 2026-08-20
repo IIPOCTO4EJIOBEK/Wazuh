@@ -1,0 +1,25 @@
+---
+# =====================================================================
+#  Полное развёртывание Wazuh. Порядок шагов обязателен:
+#  сертификаты → индексер → менеджер → дашборд → балансир →
+#  резервирование → интеграции.
+#
+#  Установка целиком:
+#      ansible-playbook site.yml --ask-vault-pass
+#
+#  Отдельный слой (теги):
+#      ansible-playbook site.yml --tags indexer --ask-vault-pass
+#
+#  Прогон без изменений (проверка дрейфа конфигурации):
+#      ansible-playbook site.yml --check --diff --ask-vault-pass
+# =====================================================================
+
+- import_playbook: playbooks/preflight.yml
+- import_playbook: playbooks/certificates.yml
+- import_playbook: playbooks/indexer.yml
+- import_playbook: playbooks/manager.yml
+- import_playbook: playbooks/dashboard.yml
+- import_playbook: playbooks/loadbalancer.yml
+- import_playbook: playbooks/backup.yml
+- import_playbook: playbooks/integrations.yml
+- import_playbook: playbooks/healthcheck.yml

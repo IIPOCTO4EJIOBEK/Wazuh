@@ -1,0 +1,139 @@
+---
+# Репозиторий и расписание снапшотов индексера.
+#
+# Снапшот в OpenSearch инкрементальный: первый занимает объём всех
+# индексов, последующие — только изменения. Поэтому ежедневный снапшот
+# с хранением 30 копий стоит дешевле, чем кажется, и даёт возможность
+# вернуться к состоянию любого дня месяца.
+
+- name: Регистрация репозитория снапшотов
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_snapshot/{{ snapshot_repo_name }}"
+    method: PUT
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      type: fs
+      settings:
+        location: "{{ snapshot_mount_point }}"
+        compress: true
+        # Ограничение скорости, чтобы снапшот не выедал диск и сеть
+        # в рабочее время.
+        max_snapshot_bytes_per_sec: "80mb"
+        max_restore_bytes_per_sec: "160mb"
+    status_code: [200, 201]
+
+- name: Проверка репозитория со всех узлов
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_snapshot/{{ snapshot_repo_name }}/_verify"
+    method: POST
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [200]
+  register: repo_verify
+
+- name: Репозиторий доступен всем узлам индексера
+  ansible.builtin.assert:
+    that: repo_verify.json.nodes | length == groups['wazuh_indexer'] | length
+    fail_msg: >-
+      Репозиторий снапшотов виден только
+      {{ repo_verify.json.nodes | length }} узлам из
+      {{ groups['wazuh_indexer'] | length }}. Снапшот в таком состоянии
+      не соберётся: проверить монтирование {{ snapshot_mount_point }}.
+    success_msg: "Репозиторий {{ snapshot_repo_name }} доступен всем узлам индексера."
+
+- name: Политика автоматических снапшотов
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_plugins/_sm/policies/wazuh-daily"
+    method: POST
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      description: "Ежедневный снапшот индексов Wazuh для AH Prostory"
+      creation:
+        schedule:
+          cron:
+            expression: "{{ snapshot_schedule_cron }}"
+            timezone: "Europe/Moscow"
+        time_limit: "2h"
+      deletion:
+        schedule:
+          cron:
+            expression: "30 3 * * *"
+            timezone: "Europe/Moscow"
+        condition:
+          max_count: "{{ snapshot_keep_count }}"
+          max_age: "{{ ism_delete_days }}d"
+        time_limit: "1h"
+      snapshot_config:
+        repository: "{{ snapshot_repo_name }}"
+        indices: "wazuh-*"
+        ignore_unavailable: true
+        include_global_state: false
+        partial: false
+      notification:
+        channel:
+          id: ""
+        conditions:
+          creation: false
+          deletion: false
+          failure: true
+    status_code: [200, 201, 409]
+  register: sm_policy
+  failed_when:
+    - sm_policy.status not in [200, 201, 409]
+
+- name: Проверочный снапшот
+  ansible.builtin.uri:
+    url: >-
+      https://{{ ansible_host }}:{{ indexer_http_port }}/_snapshot/{{ snapshot_repo_name }}/verify-{{ ansible_date_time.epoch }}?wait_for_completion=true
+    method: PUT
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      indices: "wazuh-alerts-*"
+      ignore_unavailable: true
+      include_global_state: false
+    status_code: [200]
+    timeout: 600
+  register: test_snapshot
+  when: snapshot_verify_on_deploy | default(true)
+
+- name: Снапшот собрался целиком
+  ansible.builtin.assert:
+    that:
+      - test_snapshot.json.snapshot.state == 'SUCCESS'
+      - test_snapshot.json.snapshot.shards.failed | int == 0
+    fail_msg: >-
+      Проверочный снапшот завершился со статусом
+      {{ test_snapshot.json.snapshot.state | default('неизвестно') }}.
+      Резервное копирование индексов не работает — разбираться до
+      ввода системы в эксплуатацию.
+    success_msg: >-
+      Проверочный снапшот собран: шардов
+      {{ test_snapshot.json.snapshot.shards.successful }},
+      ошибок нет.
+  when: snapshot_verify_on_deploy | default(true)
+
+- name: Удаление проверочного снапшота
+  ansible.builtin.uri:
+    url: >-
+      https://{{ ansible_host }}:{{ indexer_http_port }}/_snapshot/{{ snapshot_repo_name }}/verify-{{ ansible_date_time.epoch }}
+    method: DELETE
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [200, 404]
+  when: snapshot_verify_on_deploy | default(true)

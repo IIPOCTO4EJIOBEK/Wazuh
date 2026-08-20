@@ -1,0 +1,98 @@
+---
+# Однократная инициализация кластера индексера: загрузка конфигурации
+# безопасности, шаблон индексов и политика жизненного цикла.
+# Выполняется на одном узле — конфигурация расходится по кластеру сама.
+
+- name: Ожидание, что кластер собрался
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_cluster/health?wait_for_status=yellow&timeout=60s"
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: [200, 401]
+  register: cluster_wait
+  retries: 20
+  delay: 15
+  until: cluster_wait.status in [200, 401]
+
+- name: Загрузка конфигурации плагина security
+  ansible.builtin.command:
+    cmd: >-
+      /usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh
+      -cd /etc/wazuh-indexer/opensearch-security/
+      -icl -nhnv
+      -cacert /etc/wazuh-indexer/certs/root-ca.pem
+      -cert /etc/wazuh-indexer/certs/admin.pem
+      -key /etc/wazuh-indexer/certs/admin-key.pem
+      -h {{ ansible_host }}
+      -p {{ indexer_http_port }}
+  environment:
+    OPENSEARCH_JAVA_HOME: /usr/share/wazuh-indexer/jdk
+    JAVA_HOME: /usr/share/wazuh-indexer/jdk
+  register: securityadmin
+  changed_when: "'Done with success' in securityadmin.stdout"
+  failed_when: securityadmin.rc != 0
+
+- name: Проверка, что новые учётные записи приняты
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_cluster/health"
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+  register: auth_check
+  retries: 6
+  delay: 10
+  until: auth_check.status == 200
+
+# ---------------------------------------------------------------------
+# Шаблон индексов wazuh-alerts-*.
+# Число первичных шардов равно числу узлов данных, реплика одна:
+# любой узел можно потерять без потери данных и без остановки поиска.
+# ---------------------------------------------------------------------
+- name: Настройки шардирования для wazuh-alerts-*
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_index_template/wazuh-ahp-alerts"
+    method: PUT
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body:
+      index_patterns: ["wazuh-alerts-*"]
+      priority: 200
+      template:
+        # Маппинги из wazuh-template.json (filebeat): composable-шаблон
+        # перекрывает legacy-шаблон filebeat, без маппингов поля становятся
+        # динамическими text и агрегации дашборда (manager.name) падают.
+        mappings: "{{ lookup('template', 'wazuh-alerts-mappings.json.j2') | from_json }}"
+        settings:
+          index.number_of_shards: "{{ indexer_alerts_shards }}"
+          index.number_of_replicas: "{{ indexer_alerts_replicas }}"
+          index.refresh_interval: "5s"
+          index.plugins.index_state_management.policy_id: "wazuh-alerts-retention"
+          # Восстановление реплик после перезапуска узла — не мгновенное,
+          # чтобы плановый рестарт не вызывал шторм копирования.
+          index.unassigned.node_left.delayed_timeout: "10m"
+    status_code: [200, 201]
+
+- name: Политика жизненного цикла индексов
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ indexer_http_port }}/_plugins/_ism/policies/wazuh-alerts-retention"
+    method: PUT
+    user: admin
+    password: "{{ vault_indexer_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    body_format: json
+    body: "{{ lookup('template', 'ism-wazuh-alerts.json.j2') }}"
+    status_code: [200, 201, 409]
+
+- name: Итог инициализации
+  ansible.builtin.debug:
+    msg: >-
+      Кластер {{ indexer_cluster_name }}: конфигурация безопасности загружена,
+      шаблон wazuh-alerts-* — {{ indexer_alerts_shards }} шарда,
+      {{ indexer_alerts_replicas }} реплика, хранение {{ ism_delete_days }} суток.

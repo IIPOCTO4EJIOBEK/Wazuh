@@ -1,0 +1,32 @@
+---
+# Проверка, что собственные правила действительно срабатывают.
+#
+# Без этого шага ошибка в регулярном выражении остаётся незамеченной до
+# настоящего инцидента: правило просто молчит. wazuh-logtest прогоняет
+# образец события через полный конвейер декодеров и правил.
+
+- name: Прогон образцов событий через wazuh-logtest
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      printf '%s\n' {{ item.sample | quote }} \
+        | /var/ossec/bin/wazuh-logtest -l {{ item.location | quote }} 2>&1
+    executable: /bin/bash
+  loop: "{{ wazuh_rule_selftest_cases }}"
+  loop_control:
+    label: "{{ item.name }} → правило {{ item.expect_rule }}"
+  register: logtest
+  changed_when: false
+  failed_when: false
+
+- name: Каждый образец поднял ожидаемое правило
+  ansible.builtin.assert:
+    that: "item.item.expect_rule in item.stdout"
+    fail_msg: >-
+      Образец «{{ item.item.name }}» не поднял правило {{ item.item.expect_rule }}.
+      Вывод wazuh-logtest:
+      {{ item.stdout }}
+    success_msg: "{{ item.item.name }} → {{ item.item.expect_rule }}: срабатывает."
+  loop: "{{ logtest.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"

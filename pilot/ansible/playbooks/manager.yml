@@ -1,0 +1,33 @@
+---
+# Менеджеры ставятся по одному, начиная с master: worker при первом
+# запуске синхронизирует правила и client.keys именно с него.
+
+- name: Менеджер — master
+  hosts: wazuh_manager_master
+  gather_facts: true
+  become: true
+  tags: [manager]
+  roles:
+    - role: common
+    - role: wazuh_manager
+
+- name: Менеджеры — worker
+  hosts: wazuh_manager:!wazuh_manager_master
+  gather_facts: true
+  become: true
+  serial: 1
+  tags: [manager]
+  roles:
+    - role: common
+    - role: wazuh_manager
+
+- name: Правила, декодеры, группы агентов и active response
+  hosts: wazuh_manager_master
+  gather_facts: false
+  become: true
+  tags: [manager, content]
+  tasks:
+    - name: Содержимое обнаружения
+      ansible.builtin.include_role:
+        name: wazuh_manager
+        tasks_from: content

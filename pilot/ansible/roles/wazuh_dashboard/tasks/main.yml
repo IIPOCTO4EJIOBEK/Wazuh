@@ -1,0 +1,80 @@
+---
+# Узел дашборда. Два таких узла стоят за VIP {{ wazuh_vip_dashboard }};
+# состояние они не хранят, все настройки лежат в индексе .kibana,
+# поэтому потеря любого из них не требует восстановления.
+
+- name: Установка wazuh-dashboard (Debian)
+  ansible.builtin.apt:
+    name: "wazuh-dashboard={{ wazuh_version }}-*"
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: Установка wazuh-dashboard (RedHat)
+  ansible.builtin.dnf:
+    name: "wazuh-dashboard-{{ wazuh_version }}"
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: Закрепление версии пакета (Debian)
+  ansible.builtin.dpkg_selections:
+    name: wazuh-dashboard
+    selection: hold
+  when:
+    - wazuh_pin_packages
+    - ansible_os_family == 'Debian'
+
+- name: Сертификаты узла
+  ansible.builtin.include_role:
+    name: wazuh_certs
+    tasks_from: distribute
+
+- name: Конфигурация дашборда
+  ansible.builtin.template:
+    src: opensearch_dashboards.yml.j2
+    dest: /etc/wazuh-dashboard/opensearch_dashboards.yml
+    owner: wazuh-dashboard
+    group: wazuh-dashboard
+    mode: "0640"
+    backup: true
+  no_log: true
+  notify: restart wazuh-dashboard
+
+- name: Каталог конфигурации wazuh.yml (создаётся пакетом при первом старте)
+  ansible.builtin.file:
+    path: /usr/share/wazuh-dashboard/data/wazuh/config
+    state: directory
+    owner: wazuh-dashboard
+    group: wazuh-dashboard
+    mode: "0750"
+
+- name: Подключение к Wazuh API
+  ansible.builtin.template:
+    src: wazuh.yml.j2
+    dest: /usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
+    owner: wazuh-dashboard
+    group: wazuh-dashboard
+    mode: "0600"
+  no_log: true
+  notify: restart wazuh-dashboard
+
+# Дашборд работает не от root, а порт 443 привилегированный.
+# Без этой возможности служба падает при старте.
+- name: Право занимать привилегированный порт
+  community.general.capabilities:
+    path: /usr/share/wazuh-dashboard/node/bin/node
+    capability: cap_net_bind_service=+ep
+    state: present
+  when: dashboard_port | int < 1024
+
+- name: Служба дашборда запущена
+  ansible.builtin.service:
+    name: wazuh-dashboard
+    state: started
+    enabled: true
+
+- name: Ожидание готовности
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ dashboard_port }}"
+    delay: 10
+    timeout: 300

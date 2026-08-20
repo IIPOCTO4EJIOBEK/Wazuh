@@ -1,0 +1,239 @@
+---
+# Узел кластера менеджеров: приём событий агентов, анализ, active
+# response, Wazuh API и отгрузка алертов в индексер через filebeat.
+
+- name: Установка wazuh-manager (Debian)
+  ansible.builtin.apt:
+    name: "wazuh-manager={{ wazuh_version }}-*"
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: Установка wazuh-manager (RedHat)
+  ansible.builtin.dnf:
+    name: "wazuh-manager-{{ wazuh_version }}"
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: Закрепление версии пакета (Debian)
+  ansible.builtin.dpkg_selections:
+    name: wazuh-manager
+    selection: hold
+  when:
+    - wazuh_pin_packages
+    - ansible_os_family == 'Debian'
+
+# ---------------------------------------------------------------------
+# Ключ кластера и пароль регистрации агентов
+# ---------------------------------------------------------------------
+- name: Длина ключа кластера ровно 32 символа
+  ansible.builtin.assert:
+    that: vault_manager_cluster_key | length == 32
+    fail_msg: >-
+      vault_manager_cluster_key должен быть длиной ровно 32 символа
+      (openssl rand -hex 16), иначе узлы кластера не согласуют шифрование.
+
+- name: Пароль регистрации агентов
+  ansible.builtin.copy:
+    dest: /var/ossec/etc/authd.pass
+    content: "{{ vault_agent_enrollment_password }}"
+    owner: root
+    group: wazuh
+    mode: "0640"
+  no_log: true
+  notify: restart wazuh-manager
+
+- name: Основная конфигурация ossec.conf
+  ansible.builtin.template:
+    src: ossec.conf.j2
+    dest: /var/ossec/etc/ossec.conf
+    owner: root
+    group: wazuh
+    mode: "0660"
+    backup: true
+  register: ossec_conf
+  notify: restart wazuh-manager
+
+# wazuh-analysisd читает только штатный путь ossec.conf, поэтому проверка
+# идёт после записи файла. При ошибке play прерывается до перезапуска
+# службы, а предыдущая конфигурация остаётся рядом в виде .bak.
+- name: Синтаксическая проверка ossec.conf
+  ansible.builtin.command: /var/ossec/bin/wazuh-analysisd -t
+  register: conf_test
+  changed_when: false
+  failed_when: conf_test.rc != 0
+  when: ossec_conf.changed
+
+- name: Внутренние параметры демонов
+  ansible.builtin.template:
+    src: local_internal_options.conf.j2
+    dest: /var/ossec/etc/local_internal_options.conf
+    owner: root
+    group: wazuh
+    mode: "0640"
+  notify: restart wazuh-manager
+
+# ---------------------------------------------------------------------
+# Креды индексера для модулей состояния (Wazuh 4.14).
+#
+# Секция <indexer> в ossec.conf НЕ используется коннектором модулей
+# (inventory, vulnerability-scanner): он читает keystore менеджера
+# (family=indexer, keys=username/password) и без них падает с
+# «IndexerConnector initialization failed» и индексы wazuh-states-*
+# не создаются. См. инцидент пилота 2026-08-20.
+# ---------------------------------------------------------------------
+- name: Креды индексер-коннектора в keystore менеджера
+  ansible.builtin.shell: |
+    set -e
+    /var/ossec/bin/wazuh-keystore -f indexer -k username -v admin
+    /var/ossec/bin/wazuh-keystore -f indexer -k password -v "{{ vault_indexer_admin_password }}"
+  no_log: true
+  notify: restart wazuh-manager
+
+# ---------------------------------------------------------------------
+# Wazuh API
+# ---------------------------------------------------------------------
+- name: Каталог TLS-сертификатов Wazuh API
+  ansible.builtin.file:
+    path: /var/ossec/api/configuration/ssl
+    state: directory
+    owner: root
+    group: wazuh
+    mode: "0750"
+
+- name: TLS-сертификаты Wazuh API
+  ansible.builtin.copy:
+    src: "/etc/filebeat/certs/{{ item }}"
+    dest: "/var/ossec/api/configuration/ssl/{{ item }}"
+    remote_src: true
+    owner: root
+    group: wazuh
+    mode: "0640"
+  loop:
+    - root-ca.pem
+    - manager.pem
+    - manager-key.pem
+  notify: restart wazuh-manager
+
+- name: Конфигурация Wazuh API
+  ansible.builtin.template:
+    src: api.yaml.j2
+    dest: /var/ossec/api/configuration/api.yaml
+    owner: root
+    group: wazuh
+    mode: "0640"
+  notify: restart wazuh-manager
+
+- name: Служба менеджера запущена
+  ansible.builtin.service:
+    name: wazuh-manager
+    state: started
+    enabled: true
+
+- name: Ожидание готовности API
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ manager_api_port }}"
+    delay: 5
+    timeout: 180
+
+- name: Пароли пользователей API
+  ansible.builtin.include_tasks: api_users.yml
+
+# ---------------------------------------------------------------------
+# Filebeat: менеджер → индексер
+# ---------------------------------------------------------------------
+- name: Установка filebeat (Debian)
+  ansible.builtin.apt:
+    name: "filebeat={{ filebeat_version }}"
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: Установка filebeat (RedHat)
+  ansible.builtin.dnf:
+    name: "filebeat-{{ filebeat_version }}"
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: Закрепление версии filebeat (Debian)
+  ansible.builtin.dpkg_selections:
+    name: filebeat
+    selection: hold
+  when:
+    - wazuh_pin_packages
+    - ansible_os_family == 'Debian'
+
+- name: Каталог модулей filebeat
+  ansible.builtin.file:
+    path: /usr/share/filebeat/module
+    state: directory
+    mode: "0755"
+
+- name: Проверка, установлен ли модуль wazuh
+  ansible.builtin.stat:
+    path: /usr/share/filebeat/module/wazuh/alerts/manifest.yml
+  register: fb_module
+
+- name: Модуль wazuh для filebeat
+  ansible.builtin.unarchive:
+    src: "{{ filebeat_module_url }}"
+    dest: /usr/share/filebeat/module
+    remote_src: true
+    owner: root
+    group: root
+  when: not fb_module.stat.exists
+
+- name: Шаблон индексов Wazuh
+  ansible.builtin.get_url:
+    url: "{{ filebeat_template_url }}"
+    dest: /etc/filebeat/wazuh-template.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart filebeat
+
+- name: Конфигурация filebeat
+  ansible.builtin.template:
+    src: filebeat.yml.j2
+    dest: /etc/filebeat/filebeat.yml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: restart filebeat
+
+- name: Сертификаты filebeat
+  ansible.builtin.include_role:
+    name: wazuh_certs
+    tasks_from: distribute
+
+- name: Хранилище секретов filebeat
+  ansible.builtin.command: filebeat keystore create --force
+  args:
+    creates: /var/lib/filebeat/filebeat.keystore
+
+- name: Учётные данные индексера в keystore
+  ansible.builtin.shell:
+    cmd: "printf '%s' '{{ item.value }}' | filebeat keystore add {{ item.key }} --stdin --force"
+  loop:
+    - { key: "username", value: "filebeat" }
+    - { key: "password", value: "{{ vault_indexer_filebeat_password }}" }
+  no_log: true
+  changed_when: true
+  notify: restart filebeat
+
+- name: Служба filebeat запущена
+  ansible.builtin.service:
+    name: filebeat
+    state: started
+    enabled: true
+
+- name: Проверка связи filebeat с индексером
+  ansible.builtin.command: filebeat test output
+  register: fb_test
+  changed_when: false
+  retries: 3
+  delay: 10
+  until: fb_test.rc == 0
+
+- name: Результат проверки
+  ansible.builtin.debug:
+    var: fb_test.stdout_lines

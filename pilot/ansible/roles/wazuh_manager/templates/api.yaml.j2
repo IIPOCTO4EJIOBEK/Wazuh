@@ -1,0 +1,45 @@
+# =====================================================================
+#  Wazuh API на {{ manager_node_name }}. Управляется Ansible.
+#  API доступен только из сегмента мониторинга: запись в него означает
+#  право менять правила и запускать active response на любом агенте.
+# =====================================================================
+
+host:
+  - 0.0.0.0
+port: {{ manager_api_port }}
+
+https:
+  enabled: yes
+  key: "manager-key.pem"
+  cert: "manager.pem"
+  use_ca: False
+  ca: "root-ca.pem"
+  ssl_protocol: "TLSv1.2"
+  ssl_ciphers: ""
+
+logs:
+  level: "info"
+  format: "plain"
+
+cors:
+  enabled: no
+
+access:
+  # Пять неудачных попыток — блокировка адреса на 5 минут.
+  max_login_attempts: 5
+  block_time: 300
+  max_request_per_minute: 300
+
+upload_configuration:
+  # Конфигурация приезжает из Ansible, менять её через API незачем.
+  remote_commands:
+    localfile:
+      allow: no
+    wodle_command:
+      allow: no
+  limits:
+    eps:
+      allow: yes
+  agents:
+    allow_higher_versions:
+      allow: no

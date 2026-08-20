@@ -1,0 +1,76 @@
+---
+# Резервное копирование конфигураций менеджера.
+#
+# Что здесь важно понимать: индексы с алертами и конфигурация менеджера
+# — это две разные копии с разными сроками и разными способами
+# восстановления. Индексы уходят в снапшоты (tasks/snapshot_*.yml),
+# конфигурация — сюда.
+#
+# Без client.keys восстановленный менеджер не примет ни одного агента:
+# все триста придётся регистрировать заново. Это самый дорогой файл
+# во всей установке, и он весит килобайты.
+
+- name: Каталог резервных копий
+  ansible.builtin.file:
+    path: "{{ config_backup_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Скрипты резервного копирования
+  ansible.builtin.copy:
+    src: "{{ wazuh_content_dir }}/backup/{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - wazuh-backup.sh
+    - wazuh-restore.sh
+
+- name: Настройки резервного копирования
+  ansible.builtin.template:
+    src: backup.env.j2
+    dest: /etc/wazuh-backup.env
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Ежедневная копия конфигурации
+  ansible.builtin.cron:
+    name: "wazuh config backup"
+    minute: "{{ config_backup_cron.split(' ')[0] }}"
+    hour: "{{ config_backup_cron.split(' ')[1] }}"
+    job: "/usr/local/sbin/wazuh-backup.sh >> /var/log/wazuh-backup.log 2>&1"
+    user: root
+
+- name: Выгрузка копий за пределы площадки
+  ansible.builtin.cron:
+    name: "wazuh offsite copy"
+    minute: "{{ offsite_cron.split(' ')[0] }}"
+    hour: "{{ offsite_cron.split(' ')[1] }}"
+    job: "/usr/local/sbin/wazuh-backup.sh --offsite-only >> /var/log/wazuh-backup.log 2>&1"
+    user: root
+    state: "{{ 'present' if offsite_enabled else 'absent' }}"
+
+- name: Журнал резервного копирования читается агентом
+  ansible.builtin.lineinfile:
+    path: /var/ossec/etc/ossec.conf
+    insertbefore: "</ossec_config>"
+    line: |2
+        <localfile>
+          <log_format>syslog</log_format>
+          <location>/var/log/wazuh-backup.log</location>
+        </localfile>
+    state: present
+  notify: restart wazuh-manager
+
+- name: Первый запуск для проверки
+  ansible.builtin.command: /usr/local/sbin/wazuh-backup.sh --dry-run
+  register: backup_check
+  changed_when: false
+
+- name: Результат проверки
+  ansible.builtin.debug:
+    var: backup_check.stdout_lines

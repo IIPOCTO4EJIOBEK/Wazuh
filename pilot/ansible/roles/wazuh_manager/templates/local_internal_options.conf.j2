@@ -1,0 +1,66 @@
+# =====================================================================
+#  Внутренние параметры демонов менеджера. Управляется Ansible.
+#  Значения подобраны под поток ~400 агентов и ~1500 событий в секунду.
+# =====================================================================
+
+# --- analysisd -------------------------------------------------------
+# Очереди приёма. Переполнение очереди видно в
+# /var/ossec/var/run/wazuh-analysisd.state как *_queue_usage близкий к 1.
+analysisd.decode_event_queue_size=16384
+analysisd.decode_output_queue_size=16384
+analysisd.archives_queue_size=16384
+analysisd.statistical_queue_size=16384
+analysisd.alerts_queue_size=16384
+analysisd.firewall_queue_size=8192
+analysisd.fts_queue_size=16384
+analysisd.state_interval=5
+
+# Потоки разбора событий. По одному на два ядра — больше не даёт выигрыша,
+# упирается в общую очередь правил.
+analysisd.event_threads=0
+analysisd.syscheck_threads=0
+analysisd.syscollector_threads=0
+analysisd.rootcheck_threads=0
+analysisd.sca_threads=0
+analysisd.hostinfo_threads=0
+analysisd.winevt_threads=0
+analysisd.rule_matching_threads=0
+
+# --- remoted ---------------------------------------------------------
+# Число потоков приёма от агентов и размер очереди.
+remoted.recv_counter_flush=128
+remoted.comp_average_printout=19999
+remoted.verify_msg_id=1
+remoted.recv_timeout=1
+remoted.sender_pool=8
+remoted.request_pool=8
+remoted.worker_pool=1
+
+# --- wazuh-db --------------------------------------------------------
+wazuh_database.interval=60
+wazuh_db.commit_time_min=10
+wazuh_db.commit_time_max=60
+
+# --- monitord --------------------------------------------------------
+# Ротация и сжатие alerts.log
+monitord.day_wait=10
+monitord.compress=1
+monitord.sign=1
+monitord.rotate_log=1
+monitord.keep_log_days={{ manager_rotate_alerts_days }}
+monitord.size_rotate=512
+monitord.daily_rotations=12
+
+# --- logcollector ----------------------------------------------------
+logcollector.remote_commands=1
+logcollector.max_lines=10000
+logcollector.max_files=1000
+
+# --- wodles ----------------------------------------------------------
+wazuh_modules.debug=0
+
+# --- Уровни отладки --------------------------------------------------
+# Ставить 2 только на время разбора проблемы: журнал растёт быстро.
+analysisd.debug=0
+remoted.debug=0
+execd.debug=0

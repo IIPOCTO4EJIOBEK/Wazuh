@@ -1,0 +1,198 @@
+<!--
+  =====================================================================
+   Базовые собственные правила AH Prostory.
+   Диапазон идентификаторов: 100000–100099.
+
+   Распределение диапазонов по файлам:
+     100000–100099  local_rules.xml              общие и защита платформы
+     100200–100299  ahp_bitrix_rules.xml         Bitrix, заявки, веб
+     100300–100399  ahp_windows_ad_rules.xml     Windows, Active Directory
+     100400–100499  ahp_infrastructure_rules.xml сеть, диски, СУБД, резерв
+
+   Уровни, принятые в компании:
+      3–6   информация, только в дашборд
+      7–9   разбирает дежурный в рабочее время
+     10–11  письмо + Telegram, разбор в течение часа
+     12–14  заявка в ServiceDesk Plus, реагирование немедленно
+     15     автоматическая изоляция или блокировка учётной записи
+  =====================================================================
+-->
+
+<group name="ahp,ahp_base,">
+
+  <!-- ================================================================
+       Защита самой платформы мониторинга.
+       Если злоумышленник получил доступ к менеджеру, первое, что он
+       сделает, — отключит правила или подчистит журналы. Такие события
+       должны быть заметнее любых других.
+       ================================================================ -->
+
+  <rule id="100001" level="12">
+    <if_sid>550</if_sid>
+    <field name="file">^/var/ossec/etc/</field>
+    <description>Wazuh: изменён файл конфигурации менеджера ($(file))</description>
+    <mitre>
+      <id>T1562.001</id>
+    </mitre>
+    <group>wazuh_integrity,pci_dss_11.5,gdpr_II_5.1.f,</group>
+  </rule>
+
+  <rule id="100002" level="14">
+    <if_sid>550,553</if_sid>
+    <field name="file">^/var/ossec/etc/rules/|^/var/ossec/etc/decoders/</field>
+    <description>Wazuh: изменены правила или декодеры вне процедуры развёртывания</description>
+    <mitre>
+      <id>T1562.001</id>
+    </mitre>
+    <group>wazuh_integrity,</group>
+  </rule>
+
+  <rule id="100003" level="14">
+    <if_sid>550,553</if_sid>
+    <field name="file">^/var/ossec/active-response/bin/</field>
+    <description>Wazuh: изменён скрипт активного реагирования — возможна подмена</description>
+    <mitre>
+      <id>T1546</id>
+    </mitre>
+    <group>wazuh_integrity,</group>
+  </rule>
+
+  <!-- Агент замолчал. Для рядового узла это уровень 5, для узла из
+       списка критичных — 12: молчание агента на контроллере домена
+       ничем не отличается от успешного отключения журналирования. -->
+  <rule id="100005" level="12">
+    <if_sid>501</if_sid>
+    <list field="agent.name" lookup="match_key">etc/lists/ahp-critical-hosts</list>
+    <description>Агент Wazuh не выходит на связь с критичного узла $(agent.name)</description>
+    <mitre>
+      <id>T1562.001</id>
+    </mitre>
+    <group>wazuh_availability,</group>
+  </rule>
+
+  <rule id="100006" level="12" frequency="6" timeframe="600">
+    <if_matched_sid>501</if_matched_sid>
+    <description>Одновременно отключились шесть и более агентов за 10 минут</description>
+    <mitre>
+      <id>T1562.001</id>
+    </mitre>
+    <group>wazuh_availability,</group>
+  </rule>
+
+  <!-- ================================================================
+       Аутентификация на Linux
+       ================================================================ -->
+
+  <rule id="100010" level="12" frequency="8" timeframe="120">
+    <if_matched_sid>5716</if_matched_sid>
+    <same_source_ip />
+    <description>Подбор пароля SSH: восемь и более неудач с $(srcip) за две минуты</description>
+    <mitre>
+      <id>T1110.001</id>
+    </mitre>
+    <group>authentication_failures,pci_dss_11.4,</group>
+  </rule>
+
+  <!-- Самое опасное сочетание: серия отказов, а следом успешный вход. -->
+  <rule id="100011" level="14" timeframe="300">
+    <if_sid>5715</if_sid>
+    <if_matched_sid>5716</if_matched_sid>
+    <same_source_ip />
+    <description>Успешный вход SSH с $(srcip) сразу после серии неудачных попыток</description>
+    <mitre>
+      <id>T1110.001</id>
+    </mitre>
+    <group>authentication_success,attack,</group>
+  </rule>
+
+  <rule id="100012" level="10">
+    <if_sid>5715</if_sid>
+    <field name="full_log" type="pcre2">(?i)accepted .+ for root from </field>
+    <description>Прямой вход по SSH под root на $(agent.name)</description>
+    <mitre>
+      <id>T1078.003</id>
+    </mitre>
+    <group>authentication_success,pci_dss_10.2.2,</group>
+  </rule>
+
+  <!-- ================================================================
+       Повышение привилегий
+       ================================================================ -->
+
+  <rule id="100020" level="12">
+    <if_sid>5402</if_sid>
+    <list field="dstuser" lookup="not_match_key">etc/lists/ahp-privileged-users</list>
+    <description>sudo выполнен учётной записью $(dstuser), которой нет в списке привилегированных</description>
+    <mitre>
+      <id>T1548.003</id>
+    </mitre>
+    <group>privilege_escalation,pci_dss_10.2.2,</group>
+  </rule>
+
+  <rule id="100021" level="12">
+    <if_sid>5901,5902</if_sid>
+    <description>Создана новая учётная запись или группа на $(agent.name)</description>
+    <mitre>
+      <id>T1136.001</id>
+    </mitre>
+    <group>account_changed,pci_dss_10.2.5,</group>
+  </rule>
+
+  <!-- ================================================================
+       Сокрытие следов
+       ================================================================ -->
+
+  <rule id="100030" level="12">
+    <if_sid>5104</if_sid>
+    <description>Сетевой интерфейс переведён в неразборчивый режим на $(agent.name)</description>
+    <mitre>
+      <id>T1040</id>
+    </mitre>
+    <group>sniffer,</group>
+  </rule>
+
+  <rule id="100031" level="12">
+    <match type="pcre2">audit_rules_removed|auditctl\s+-D|systemctl\s+stop\s+(auditd|rsyslog|syslog-ng)</match>
+    <description>Остановлена подсистема аудита на $(agent.name)</description>
+    <mitre>
+      <id>T1562.001</id>
+    </mitre>
+    <group>logs_cleared,pci_dss_10.5.2,</group>
+  </rule>
+
+  <!-- ================================================================
+       Результаты активного реагирования.
+       Отдельные правила нужны, чтобы в дашборде была честная картина:
+       что система заблокировала и что при этом не сработало.
+       ================================================================ -->
+
+  <rule id="100040" level="0">
+    <decoded_as>ahp-ar</decoded_as>
+    <description>Собственный active response — событие</description>
+  </rule>
+
+  <rule id="100041" level="6">
+    <if_sid>100040</if_sid>
+    <field name="ar.result">^ok$</field>
+    <description>Active response выполнен: $(ar.action) → $(ar.target) по правилу $(ar.rule_id)</description>
+    <group>active_response,</group>
+  </rule>
+
+  <rule id="100042" level="12">
+    <if_sid>100040</if_sid>
+    <field name="ar.result" type="pcre2">^(error|denied)$</field>
+    <description>Active response не выполнен: $(ar.action) → $(ar.target), результат $(ar.result)</description>
+    <group>active_response,</group>
+  </rule>
+
+  <!-- Срабатывание защиты от блокировки собственной инфраструктуры.
+       Само по себе это повод разобраться: либо правило слишком широкое,
+       либо атака идёт изнутри доверенной сети. -->
+  <rule id="100043" level="12">
+    <if_sid>100040</if_sid>
+    <field name="ar.result">^skipped-allowlist$</field>
+    <description>Active response отменён: $(ar.target) в списке неблокируемых адресов</description>
+    <group>active_response,</group>
+  </rule>
+
+</group>

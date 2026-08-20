@@ -1,0 +1,128 @@
+#=====================================================================
+#  HAProxy для кластера Wazuh. Управляется Ansible.
+#
+#  Распределение потоков:
+#    1514  события агентов      → оба менеджера, по числу соединений
+#    1515  регистрация агентов  → только master (authd работает там)
+#    55000 Wazuh API            → master, worker как резерв
+#    443   дашборд              → оба узла дашборда
+#
+#  Все режимы — tcp. Расшифровывать трафик агентов на балансировщике
+#  нельзя: он зашифрован собственным ключом агента, а не TLS.
+#=====================================================================
+
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+    maxconn 20000
+
+    # Ограничение по потокам: балансировщик — не узкое место,
+    # но и лишние ядра ему не нужны.
+    nbthread 4
+
+defaults
+    log     global
+    mode    tcp
+    option  tcplog
+    option  dontlognull
+    retries 3
+    timeout connect 10s
+    timeout client  1h
+    timeout server  1h
+    timeout check   5s
+    default-server inter 5s fall 3 rise 2
+
+#---------------------------------------------------------------------
+# Приём событий от агентов
+#
+# leastconn, а не roundrobin: соединение агента живёт часами, и при
+# roundrobin после перезапуска одного менеджера все агенты остаются
+# на втором, пока их не перезапустят.
+#---------------------------------------------------------------------
+frontend agents_in
+    bind {{ wazuh_vip_agents }}:{{ manager_agent_port }}
+    default_backend managers_events
+
+backend managers_events
+    balance leastconn
+    option tcp-check
+{% for h in groups['wazuh_manager'] %}
+    server {{ h }} {{ hostvars[h].ansible_host }}:{{ manager_agent_port }} check
+{% endfor %}
+
+#---------------------------------------------------------------------
+# Регистрация агентов.
+#
+# Служба authd работает только на master: ключи агентов создаются там
+# и оттуда расходятся по кластеру. Балансировать 1515 между узлами
+# нельзя — регистрация на worker просто не ответит.
+#---------------------------------------------------------------------
+frontend enrollment_in
+    bind {{ wazuh_vip_agents }}:{{ manager_enrollment_port }}
+    default_backend manager_enrollment
+
+backend manager_enrollment
+    option tcp-check
+{% for h in groups['wazuh_manager_master'] %}
+    server {{ h }} {{ hostvars[h].ansible_host }}:{{ manager_enrollment_port }} check
+{% endfor %}
+
+#---------------------------------------------------------------------
+# Wazuh API.
+#
+# Чтение работает на любом узле, а изменения (правила, группы агентов,
+# active response) обязаны идти на master. Поэтому worker помечен как
+# backup: он принимает запросы, только когда master недоступен, и в
+# этом режиме интерфейс работает на чтение.
+#---------------------------------------------------------------------
+frontend api_in
+    bind {{ wazuh_vip_agents }}:{{ manager_api_port }}
+    default_backend managers_api
+
+backend managers_api
+    balance first
+    option tcp-check
+{% for h in groups['wazuh_manager_master'] %}
+    server {{ h }} {{ hostvars[h].ansible_host }}:{{ manager_api_port }} check
+{% endfor %}
+{% for h in groups['wazuh_manager'] if h not in groups['wazuh_manager_master'] %}
+    server {{ h }} {{ hostvars[h].ansible_host }}:{{ manager_api_port }} check backup
+{% endfor %}
+
+#---------------------------------------------------------------------
+# Дашборд
+#
+# source-балансировка: интерфейс держит состояние сессии, и при
+# переключении узла оператору пришлось бы входить заново.
+#---------------------------------------------------------------------
+frontend dashboard_in
+    bind {{ wazuh_vip_dashboard }}:{{ dashboard_port }}
+    default_backend dashboards
+
+backend dashboards
+    balance source
+    hash-type consistent
+    option tcp-check
+{% for h in groups['wazuh_dashboard'] %}
+    server {{ h }} {{ hostvars[h].ansible_host }}:{{ dashboard_port }} check
+{% endfor %}
+
+#---------------------------------------------------------------------
+# Страница состояния. Доступна только из сегмента мониторинга;
+# по ней же keepalived понимает, жив ли балансировщик.
+#---------------------------------------------------------------------
+frontend stats
+    bind *:8404
+    mode http
+    stats enable
+    stats uri /stats
+    stats refresh 10s
+    stats show-node
+    stats admin if FALSE
+    monitor-uri /healthz

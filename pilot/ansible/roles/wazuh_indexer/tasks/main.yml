@@ -1,0 +1,114 @@
+---
+# Узел индексера (OpenSearch в сборке Wazuh).
+# Плейбук вызывает роль с serial: 1 — узлы поднимаются по одному,
+# кворум master-eligible (2 из 3) при этом не теряется.
+
+- name: Установка пакета wazuh-indexer
+  ansible.builtin.package:
+    name: "wazuh-indexer={{ wazuh_version }}-*"
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: Установка пакета wazuh-indexer (RedHat)
+  ansible.builtin.dnf:
+    name: "wazuh-indexer-{{ wazuh_version }}"
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+- name: Закрепление версии пакета (Debian)
+  ansible.builtin.dpkg_selections:
+    name: wazuh-indexer
+    selection: hold
+  when:
+    - wazuh_pin_packages
+    - ansible_os_family == 'Debian'
+
+- name: Каталоги данных и журналов
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "0750"
+  loop:
+    - "{{ indexer_path_data }}"
+    - "{{ indexer_path_logs }}"
+
+- name: Сертификаты узла
+  ansible.builtin.include_role:
+    name: wazuh_certs
+    tasks_from: distribute
+
+- name: Конфигурация opensearch.yml
+  ansible.builtin.template:
+    src: opensearch.yml.j2
+    dest: /etc/wazuh-indexer/opensearch.yml
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "0640"
+    backup: true
+  notify: restart wazuh-indexer
+
+- name: Размер кучи JVM
+  ansible.builtin.lineinfile:
+    path: /etc/wazuh-indexer/jvm.options
+    regexp: "^-Xm{{ item }}"
+    line: "-Xm{{ item }}{{ indexer_heap_size }}"
+    owner: wazuh-indexer
+    group: wazuh-indexer
+  loop: ["s", "x"]
+  notify: restart wazuh-indexer
+
+- name: Куча не должна уходить в подкачку
+  ansible.builtin.lineinfile:
+    path: /etc/wazuh-indexer/opensearch.yml
+    line: "bootstrap.memory_lock: true"
+    state: present
+  notify: restart wazuh-indexer
+
+- name: Каталог переопределений systemd
+  ansible.builtin.file:
+    path: /etc/systemd/system/wazuh-indexer.service.d
+    state: directory
+    mode: "0755"
+
+- name: Снятие лимита памяти для службы
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/wazuh-indexer.service.d/override.conf
+    mode: "0644"
+    content: |
+      # Управляется Ansible
+      [Service]
+      LimitMEMLOCK=infinity
+      LimitNOFILE=65536
+      LimitNPROC=8192
+      # Индексеру нужно время на корректное закрытие шардов
+      TimeoutStopSec=180
+  notify: restart wazuh-indexer
+
+- name: Конфигурация учётных записей плагина security
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/wazuh-indexer/opensearch-security/{{ item }}"
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "0600"
+  loop:
+    - internal_users.yml
+    - roles.yml
+    - roles_mapping.yml
+  no_log: true          # в шаблонах хеши паролей
+
+- name: Служба запущена и включена в автозагрузку
+  ansible.builtin.service:
+    name: wazuh-indexer
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Ожидание готовности порта индексера
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: "{{ indexer_http_port }}"
+    delay: 5
+    timeout: 300

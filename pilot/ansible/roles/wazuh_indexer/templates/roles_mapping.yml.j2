@@ -1,0 +1,75 @@
+---
+# =====================================================================
+#  Сопоставление ролей и учётных записей. Управляется Ansible.
+# =====================================================================
+
+_meta:
+  type: "rolesmapping"
+  config_version: 2
+
+all_access:
+  reserved: true
+  hidden: false
+  backend_roles:
+    - "admin"
+  users:
+    - "chulichkov.vm"
+    - "dulepov.av"
+    - "ermolaev.ag"
+    - "kirievskaya.es"
+    - "kotova.da"
+    - "pedko.tv"
+    - "presnov.av"
+    - "savenko.vm"
+    - "strekozov.iv"
+    - "tsekhovskoy.va"
+    - "velikorodnykh.av"
+  description: "Полный доступ"
+
+own_index:
+  reserved: false
+  users:
+    - "*"
+  description: "Доступ к собственным индексам"
+
+kibana_server:
+  reserved: true
+  hidden: false
+  users:
+    - "kibanaserver"
+
+wazuh_writer:
+  reserved: false
+  users:
+    - "filebeat"
+  backend_roles:
+    - "wazuh_writer"
+
+wazuh_snapshot:
+  reserved: false
+  users:
+    - "snapshotter"
+  backend_roles:
+    - "wazuh_snapshot"
+
+wazuh_reader:
+  reserved: false
+  users:
+    - "auditor"
+    - "*"
+  backend_roles:
+    - "wazuh_reader"
+
+# Просмотр дашбордов под ролью только для чтения
+kibana_user:
+  reserved: false
+  users:
+    - "auditor"
+    - "*"
+  backend_roles:
+    - "wazuh_reader"
+
+security_rest_api_access:
+  reserved: true
+  users:
+    - "admin"

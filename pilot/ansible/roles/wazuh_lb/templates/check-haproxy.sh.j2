@@ -1,0 +1,31 @@
+#!/bin/bash
+# Проверка живости балансировщика для keepalived.
+# Управляется Ansible.
+#
+# Проверяется не только наличие процесса, но и способность отвечать:
+# зависший haproxy с живым процессом — типовой сценарий, при котором
+# VIP остаётся на мёртвом узле.
+
+set -o pipefail
+
+# 1. Процесс существует
+pidof haproxy >/dev/null 2>&1 || exit 1
+
+# 2. Служебный порт отвечает
+if ! curl -sf --max-time 2 "http://127.0.0.1:8404/healthz" >/dev/null 2>&1; then
+    exit 1
+fi
+
+# 3. Хотя бы один менеджер доступен через балансировщик.
+#    Иначе VIP держать бессмысленно: соседний узел может видеть
+#    менеджеры лучше.
+alive=0
+{% for h in groups['wazuh_manager'] %}
+if timeout 2 bash -c "</dev/tcp/{{ hostvars[h].ansible_host }}/{{ manager_agent_port }}" 2>/dev/null; then
+    alive=$(( alive + 1 ))
+fi
+{% endfor %}
+
+[ "$alive" -ge 1 ] || exit 1
+
+exit 0

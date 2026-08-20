@@ -1,0 +1,241 @@
+#!/bin/bash
+# =====================================================================
+#  Блокировка адреса источника на узле, где сработало правило.
+#
+#  Вызывается wazuh-execd по протоколу active response версии 4:
+#  на стандартный ввод приходит JSON вида
+#     {"version":1,"origin":{...},"command":"add|delete",
+#      "parameters":{"alert":{...},"extra_args":[],"program":"..."}}
+#
+#  Отличия от штатного firewall-drop, ради которых написан свой скрипт:
+#
+#    1. Список неблокируемых адресов. Штатный скрипт заблокирует
+#       что угодно, включая контроллер домена и шлюз. Один раз
+#       заблокированный балансировщик стоит дороже любой атаки.
+#    2. Единый формат записи в active-responses.log, который
+#       разбирается нашим декодером (rules/local_decoder.xml) —
+#       благодаря этому в дашборде видно, что и почему заблокировано.
+#    3. Поддержка nftables и iptables без внешних зависимостей.
+#
+#  Проверить вручную:
+#     echo '{"version":1,"command":"add","parameters":{"alert":
+#       {"rule":{"id":"5716"},"data":{"srcip":"203.0.113.10"}}}}' \
+#       | /var/ossec/active-response/bin/ahp-block-ip
+# =====================================================================
+
+set -o pipefail
+
+LOG_FILE="/var/ossec/logs/active-responses.log"
+ALLOWLIST="/var/ossec/etc/lists/ar-never-block.txt"
+LOCK_DIR="/var/ossec/var/run/ahp-block-ip.lock"
+CHAIN="WAZUH-AHP"
+
+# ---------------------------------------------------------------------
+# Журналирование в формате, который понимает декодер ahp-ar
+# ---------------------------------------------------------------------
+log_result() {
+    local action="$1" target="$2" rule="$3" result="$4" comment="${5:-}"
+    printf '%s ahp-ar: action=%s target=%s rule=%s result=%s %s\n' \
+        "$(date '+%Y/%m/%d %H:%M:%S')" \
+        "$action" "${target:-none}" "${rule:-0}" "$result" "$comment" \
+        >> "$LOG_FILE"
+}
+
+# ---------------------------------------------------------------------
+# Разбор входного JSON без внешних зависимостей.
+# jq на боевых узлах может не быть, а тянуть его ради одного поля
+# в скрипт активного реагирования не стоит.
+# ---------------------------------------------------------------------
+json_field() {
+    # $1 — имя поля, $2 — строка JSON
+    printf '%s' "$2" | tr ',{}' '\n\n\n' \
+        | grep -m1 "\"$1\"" \
+        | sed -e 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*//' \
+              -e 's/^"//' -e 's/"$//' -e 's/[[:space:]]*$//'
+}
+
+# ---------------------------------------------------------------------
+# Принадлежность адреса сети CIDR. Реализовано целочисленной
+# арифметикой: ipcalc и python на узле могут отсутствовать.
+# ---------------------------------------------------------------------
+ip_to_int() {
+    local IFS=. ; read -r a b c d <<< "$1"
+    # Некорректный адрес — возвращаем пустоту, вызывающий код это ловит
+    [[ "$a$b$c$d" =~ ^[0-9]+$ ]] || return 1
+    echo $(( (a << 24) + (b << 16) + (c << 8) + d ))
+}
+
+ip_in_cidr() {
+    local ip="$1" cidr="$2"
+    local net prefix ip_int net_int mask
+
+    net="${cidr%%/*}"
+    prefix="${cidr##*/}"
+    [ "$net" = "$cidr" ] && prefix=32
+
+    ip_int=$(ip_to_int "$ip")   || return 1
+    net_int=$(ip_to_int "$net") || return 1
+    [ "$prefix" -ge 0 ] && [ "$prefix" -le 32 ] || return 1
+
+    if [ "$prefix" -eq 0 ]; then
+        return 0
+    fi
+    mask=$(( 0xFFFFFFFF << (32 - prefix) & 0xFFFFFFFF ))
+    [ $(( ip_int & mask )) -eq $(( net_int & mask )) ]
+}
+
+is_allowlisted() {
+    local ip="$1" line
+    [ -r "$ALLOWLIST" ] || return 1
+    while IFS= read -r line; do
+        line="${line%%#*}"
+        line="$(printf '%s' "$line" | tr -d '[:space:]')"
+        [ -z "$line" ] && continue
+        if ip_in_cidr "$ip" "$line"; then
+            return 0
+        fi
+    done < "$ALLOWLIST"
+    return 1
+}
+
+# ---------------------------------------------------------------------
+# Работа с межсетевым экраном
+# ---------------------------------------------------------------------
+fw_backend() {
+    if command -v nft >/dev/null 2>&1 && nft list tables >/dev/null 2>&1; then
+        echo nft
+    elif command -v iptables >/dev/null 2>&1; then
+        echo iptables
+    else
+        echo none
+    fi
+}
+
+fw_prepare() {
+    case "$(fw_backend)" in
+        nft)
+            nft list table inet wazuh >/dev/null 2>&1 || {
+                nft add table inet wazuh
+                nft add chain inet wazuh input '{ type filter hook input priority -10 ; policy accept ; }'
+            }
+            ;;
+        iptables)
+            iptables -nL "$CHAIN" >/dev/null 2>&1 || {
+                iptables -N "$CHAIN"
+                iptables -I INPUT -j "$CHAIN"
+            }
+            ;;
+    esac
+}
+
+fw_add() {
+    local ip="$1"
+    case "$(fw_backend)" in
+        nft)
+            nft list chain inet wazuh input | grep -qF "$ip" && return 0
+            nft add rule inet wazuh input ip saddr "$ip" drop
+            ;;
+        iptables)
+            iptables -C "$CHAIN" -s "$ip" -j DROP 2>/dev/null && return 0
+            iptables -I "$CHAIN" -s "$ip" -j DROP
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+fw_del() {
+    local ip="$1" handle
+    case "$(fw_backend)" in
+        nft)
+            handle=$(nft -a list chain inet wazuh input 2>/dev/null \
+                     | awk -v ip="$ip" '$0 ~ ip && /handle/ {print $NF; exit}')
+            [ -n "$handle" ] && nft delete rule inet wazuh input handle "$handle"
+            ;;
+        iptables)
+            iptables -D "$CHAIN" -s "$ip" -j DROP 2>/dev/null
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# ---------------------------------------------------------------------
+# Основной поток
+# ---------------------------------------------------------------------
+main() {
+    local input command srcip rule_id
+
+    read -r input
+    [ -z "$input" ] && { log_result unknown none 0 error "пустой ввод"; exit 1; }
+
+    command=$(json_field command "$input")
+    srcip=$(json_field srcip "$input")
+    rule_id=$(json_field id "$input")
+
+    if [ -z "$srcip" ]; then
+        log_result "$command" none "$rule_id" error "в алерте нет srcip"
+        exit 1
+    fi
+
+    # Защита от блокировки собственной инфраструктуры.
+    # Проверка выполняется и на add, и на delete: если адрес в списке,
+    # его и не блокировали.
+    if is_allowlisted "$srcip"; then
+        log_result "$command" "$srcip" "$rule_id" skipped-allowlist "адрес в списке неблокируемых"
+        exit 0
+    fi
+
+    # Дополнительная защита: не блокировать шлюз по умолчанию,
+    # даже если его почему-то нет в списке.
+    local gw
+    gw=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
+    if [ -n "$gw" ] && [ "$gw" = "$srcip" ]; then
+        log_result "$command" "$srcip" "$rule_id" skipped-allowlist "адрес является шлюзом по умолчанию"
+        exit 0
+    fi
+
+    mkdir -p "$(dirname "$LOCK_DIR")" 2>/dev/null
+    # Блокировка от одновременных запусков: два правила могут
+    # сработать на один адрес в одну секунду.
+    local waited=0
+    while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+        sleep 1
+        waited=$(( waited + 1 ))
+        if [ "$waited" -ge 10 ]; then
+            log_result "$command" "$srcip" "$rule_id" error "не удалось получить блокировку"
+            exit 1
+        fi
+    done
+    trap 'rmdir "$LOCK_DIR" 2>/dev/null' EXIT
+
+    if [ "$(fw_backend)" = "none" ]; then
+        log_result "$command" "$srcip" "$rule_id" error "на узле нет ни nft, ни iptables"
+        exit 1
+    fi
+
+    fw_prepare
+
+    case "$command" in
+        add)
+            if fw_add "$srcip"; then
+                log_result block "$srcip" "$rule_id" ok
+            else
+                log_result block "$srcip" "$rule_id" error "не удалось добавить правило"
+                exit 1
+            fi
+            ;;
+        delete)
+            if fw_del "$srcip"; then
+                log_result unblock "$srcip" "$rule_id" ok
+            else
+                log_result unblock "$srcip" "$rule_id" error "не удалось снять правило"
+                exit 1
+            fi
+            ;;
+        *)
+            log_result "$command" "$srcip" "$rule_id" error "неизвестная команда"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
