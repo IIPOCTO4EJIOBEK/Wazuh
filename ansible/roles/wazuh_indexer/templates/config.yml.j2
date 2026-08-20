@@ -1,0 +1,131 @@
+---
+# =====================================================================
+#  Конфигурация проверки подлинности индексера. Управляется Ansible.
+#
+#  Два источника учётных записей:
+#    1. внутренняя база (admin, kibanaserver, filebeat) — служебные,
+#       работают всегда и не зависят от доступности каталога;
+#    2. Active Directory — доменные учётные записи людей.
+#
+#  Порядок важен: внутренняя база проверяется первой (order 1), чтобы
+#  недоступность контроллера домена не отрезала администратора от
+#  собственной системы. Именно этой учётной записью восстанавливают
+#  доступ, когда каталог не отвечает.
+#
+#  Файл сам по себе не применяется — его загружает securityadmin.sh,
+#  см. tasks/bootstrap.yml.
+# =====================================================================
+
+_meta:
+  type: "config"
+  config_version: 2
+
+config:
+  dynamic:
+    http:
+      anonymous_auth_enabled: false
+      xff:
+        enabled: false
+
+    authc:
+      # -----------------------------------------------------------------
+      # Внутренние учётные записи
+      # -----------------------------------------------------------------
+      basic_internal_auth_domain:
+        description: "Внутренняя база учётных записей"
+        http_enabled: true
+        transport_enabled: true
+        order: 1
+        http_authenticator:
+          type: basic
+          challenge: {{ 'false' if ldap_enabled | default(false) else 'true' }}
+        authentication_backend:
+          type: intern
+
+{% if ldap_enabled | default(false) %}
+      # -----------------------------------------------------------------
+      # Active Directory
+      #
+      # Три вещи, на которых здесь спотыкаются (проверено на пилоте):
+      #
+      #  1. Индексер Wazuh — форк OpenSearch Security ветки 1.x. Сервер
+      #     каталога задаётся ключом `hosts` в виде «адрес:порт», без
+      #     схемы. Ключ `servers: ldap://...` из версии 2.x молча не
+      #     читается: ldaptive идёт на localhost:389, и все входы
+      #     заканчиваются 401. В журнале индексера при этом видно
+      #     «Unable to connect to any of those ldap servers [localhost]».
+      #
+      #  2. Без `username_attribute` пользователь представляется полным
+      #     различающим именем (CN=...), и сопоставление ролей по имени
+      #     не срабатывает.
+      #
+      #  3. `challenge: true` нужен, чтобы браузер показал окно входа.
+      #     У внутренней базы он при этом выключается — иначе окно
+      #     запрашивает внутреннюю учётную запись вместо доменной.
+      # -----------------------------------------------------------------
+      ldap_auth_domain:
+        description: "Active Directory {{ wazuh_domain }}"
+        http_enabled: true
+        transport_enabled: true
+        order: 2
+        http_authenticator:
+          type: basic
+          challenge: true
+        authentication_backend:
+          type: ldap
+          config:
+            enable_ssl: {{ ldap_enable_ssl | default(false) | lower }}
+            enable_start_tls: {{ ldap_enable_start_tls | default(false) | lower }}
+            enable_ssl_client_auth: false
+            verify_hostnames: {{ ldap_verify_hostnames | default(false) | lower }}
+            hosts:
+{% for host in ldap_hosts %}
+              - {{ host }}
+{% endfor %}
+            connect_timeout: {{ ldap_connect_timeout | default(5000) }}
+            response_timeout: {{ ldap_response_timeout | default(5000) }}
+            bind_dn: "{{ ldap_bind_dn }}"
+            password: "{{ vault_ldap_bind_password }}"
+            userbase: "{{ ldap_userbase }}"
+            usersearch: "{{ ldap_usersearch | default('(sAMAccountName={0})') }}"
+            username_attribute: "{{ ldap_username_attribute | default('sAMAccountName') }}"
+{% endif %}
+
+    authz:
+{% if ldap_group_authz | default(false) %}
+      # -----------------------------------------------------------------
+      # Роли по группам безопасности каталога.
+      #
+      # Включается переменной ldap_group_authz. Пока выключено: права
+      # выданы по именам пользователей (indexer_admin_users). Переход на
+      # группы избавляет от правки списка при каждом кадровом изменении,
+      # но требует заведённых групп в каталоге.
+      # -----------------------------------------------------------------
+      ldap_roles_from_groups:
+        description: "Роли из групп безопасности {{ wazuh_domain }}"
+        http_enabled: true
+        transport_enabled: true
+        authorization_backend:
+          type: ldap
+          config:
+            enable_ssl: {{ ldap_enable_ssl | default(false) | lower }}
+            verify_hostnames: {{ ldap_verify_hostnames | default(false) | lower }}
+            hosts:
+{% for host in ldap_hosts %}
+              - {{ host }}
+{% endfor %}
+            bind_dn: "{{ ldap_bind_dn }}"
+            password: "{{ vault_ldap_bind_password }}"
+            rolebase: "{{ ldap_rolebase | default(ldap_userbase) }}"
+            rolesearch: "{{ ldap_rolesearch | default('(member={0})') }}"
+            userroleattribute: null
+            userrolename: "memberOf"
+            rolename: "cn"
+            resolve_nested_roles: true
+            userbase: "{{ ldap_userbase }}"
+            usersearch: "{{ ldap_usersearch | default('(sAMAccountName={0})') }}"
+{% else %}
+      # Роли по группам каталога выключены: права выданы по именам
+      # пользователей. Включается переменной ldap_group_authz.
+      {}
+{% endif %}

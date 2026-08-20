@@ -504,6 +504,135 @@ ansible-playbook -i inventory/pilot/hosts.yml playbooks/agents-linux.yml --ask-v
 
 ---
 
+## Подключение агентов на стенде
+
+Стенд поднят: `10.17.1.252`, имя узла `wazush`. Ниже — фактические
+команды, а не образцы.
+
+### Linux через Ansible
+
+```bash
+cd ansible
+
+# Все узлы из инвентаря пилота
+ansible-playbook -i inventory/pilot/hosts.yml \
+                 playbooks/agents-linux.yml --ask-vault-pass
+
+# Отдельная группа
+ansible-playbook -i inventory/pilot/hosts.yml \
+                 playbooks/agents-linux.yml --limit agents_bitrix --ask-vault-pass
+```
+
+Перед запуском стоит убедиться, что переменные пилота действительно
+применились к узлам с агентами, а не только к самому `wazush`:
+
+```bash
+ansible -i inventory/pilot/hosts.yml web01 -m debug -a "var=wazuh_vip_agents"
+# ожидается 10.17.1.252, а не 10.5.2.90
+```
+
+Проверка нужна из-за порядка приоритетов переменных Ansible: боевой
+`ansible/group_vars/all.yml` перекрывает и `all: vars:` инвентаря, и
+соседний `group_vars/all.yml`. Поэтому переменные пилота лежат в
+`group_vars/pilot.yml` — по имени группы, а не `all`. Подробности — в
+шапке `inventory/pilot/hosts.yml`.
+
+### Контроллеры домена
+
+Ставятся вручную, с самих машин:
+
+```powershell
+.\Install-WazuhAgent.ps1 -Manager 10.17.1.252 `
+                         -Group 'default,windows,dc' `
+                         -RegistrationPassword '<пароль регистрации>'
+```
+
+Пароль регистрации:
+
+```bash
+ansible-vault view group_vars/vault.yml | grep vault_agent_enrollment_password
+```
+
+### Что должно появиться после подключения
+
+Проверено на первом подключённом узле (`pbx1`, Debian 11, группы
+`default,linux,asterisk`, 20.08.2026):
+
+| Что | Через сколько | Откуда берётся |
+|-----|---------------|----------------|
+| Агент в списке `active` | сразу | `agent_control -l` |
+| События в дашборде | минуты | правила менеджера |
+| Инвентарь узла | до часа | модуль `syscollector` |
+| Уязвимости | до часа после инвентаря | сопоставление инвентаря с базами CVE |
+| Оценка по CIS | до 12 часов | модуль `sca` |
+
+Порядок здесь не случаен и объясняет пустые дашборды сразу после
+установки. **Уязвимости считает менеджер**, а не агент: агент отдаёт
+список установленных пакетов через `syscollector`, менеджер сопоставляет
+его с базами CVE и пишет результат в `wazuh-states-vulnerabilities-*`.
+Пока инвентарь не пришёл — сопоставлять нечего, и индекс пуст. Это не
+поломка, это порядок работы.
+
+Отсюда же следует: если уязвимостей нет, проверять надо не модуль
+уязвимостей, а инвентарь.
+
+```bash
+# Пришёл ли инвентарь с агента
+/var/ossec/bin/agent_control -i 001 | head -20
+
+# Есть ли данные в индексе
+curl -sk -u admin \
+  'https://10.17.1.252:9200/wazuh-states-vulnerabilities-*/_count?pretty'
+```
+
+### Первый шум и что с ним делать
+
+На `pbx1` в первые же часы пошли события контроля целостности от
+временных файлов cron: каждая правка расписания пишется через
+`/var/spool/cron/crontabs/tmp.XXXXXX`, и на выходе три события вместо
+одного — файл создан, расписание изменено, временный удалён.
+
+Снято на стороне агента, в `rules/agent-groups/linux.conf`:
+
+```xml
+<ignore type="sregex">/crontabs/tmp</ignore>
+```
+
+Само расписание под контролем остаётся — исключены только временные
+файлы. Это образец того, как снимается шум: не отключением правила
+целиком, а точечным исключением с понятной причиной.
+
+Правила уровня 0 для подавления складываются в `rules/ahp_tuning.xml`,
+у каждого — причина и дата.
+
+### Если подключение к Wazuh API показывает Offline
+
+Симптом: в интерфейсе соединение с менеджером помечено как недоступное,
+при этом порт 55000 отвечает.
+
+```bash
+# Порт слушается
+ss -tlnp | grep 55000
+
+# Пароль пользователя интерфейса совпадает с тем, что в vault
+curl -sk -u wazuh-wui:ПАРОЛЬ -X POST \
+  'https://10.17.1.252:55000/security/user/authenticate?raw=true'
+# Ожидается токен, а не 401
+
+# Что видит сам интерфейс
+grep -i "wazuh-wui\|API" /var/log/wazuh-dashboard/dashboard.log | tail -20
+```
+
+Чаще всего расходится пароль `wazuh-wui`: он задаётся в двух местах —
+в API менеджера и в `wazuh.yml` дашборда. Прогон роли выравнивает оба:
+
+```bash
+ansible-playbook -i inventory/pilot/hosts.yml site.yml \
+                 --tags manager,dashboard --ask-vault-pass
+```
+
+---
+
 ## Приёмка пилота
 
 - [ ] Интерфейс открывается, вход выполняется

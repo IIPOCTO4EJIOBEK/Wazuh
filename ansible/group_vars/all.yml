@@ -31,7 +31,11 @@ wazuh_pin_packages: true
 # ---------------------------------------------------------------------
 # Сеть и имена
 # ---------------------------------------------------------------------
-wazuh_domain: "ahprostory.ru"
+# Домен Active Directory компании. Используется в SAN сертификатов,
+# в /etc/hosts узлов, в адресах почты и в именах виртуальных адресов.
+# Значение сверено с пилотом: контроллеры домена отвечают за
+# rusagroeco.ru, LDAP-поиск идёт по DC=rusagroeco,DC=ru.
+wazuh_domain: "rusagroeco.ru"
 wazuh_dashboard_fqdn: "wazuh.{{ wazuh_domain }}"       # VIP дашборда
 wazuh_agents_fqdn: "wazuh-agents.{{ wazuh_domain }}"   # VIP приёма агентов
 
@@ -55,6 +59,7 @@ wazuh_trusted_networks:
 # Сюда обязательно входят контроллеры домена, шлюзы, СХД и сам SOC.
 wazuh_ar_never_block:
   - "10.5.2.0/24"        # сегмент мониторинга (Zabbix, Wazuh)
+  - "10.1.20.21"         # контроллер домена, LDAP
   - "10.1.20.41"         # PDC-DB1, MSSQL
   - "10.2.27.118"        # pdc-hv0, гипервизор
   - "10.0.1.50"          # HAProxy Bitrix
@@ -88,6 +93,47 @@ ism_hot_days: 7           # горячая фаза
 ism_warm_days: 30         # тёплая (read-only, force_merge)
 ism_cold_days: 90         # холодная (снапшот сделан, реплики сняты)
 ism_delete_days: 400      # удаление; 400 дней ≈ год + запас на проверки
+
+# ---------------------------------------------------------------------
+# Вход по учётным записям Active Directory
+#
+# Настроено по образцу Zabbix: тот же контроллер домена и тот же
+# технический пользователь. Подробности и разбор ошибок —
+# docs/15-ad-authentication.md
+# ---------------------------------------------------------------------
+ldap_enabled: true
+ldap_hosts:
+  - "10.1.20.21:389"          # без схемы ldap:// — форк ветки 1.x её не понимает
+ldap_bind_dn: "CN=zabbix_tech,OU=Tech Users,OU=Special,DC=rusagroeco,DC=ru"
+ldap_userbase: "DC=rusagroeco,DC=ru"
+ldap_usersearch: "(sAMAccountName={0})"
+ldap_username_attribute: "sAMAccountName"   # без него имя = полный DN
+ldap_enable_ssl: false                      # 389/tcp внутри сети
+ldap_enable_start_tls: false
+ldap_verify_hostnames: false
+ldap_connect_timeout: 5000
+ldap_response_timeout: 5000
+
+# Роли по группам безопасности каталога вместо списка имён.
+# Требует заведённых групп; пока права выданы поимённо.
+ldap_group_authz: false
+
+# Кто получает полный доступ к платформе.
+indexer_admin_users:
+  - "chulichkov.vm"
+  - "dulepov.av"
+  - "ermolaev.ag"
+  - "kirievskaya.es"
+  - "kotova.da"
+  - "pedko.tv"
+  - "presnov.av"
+  - "savenko.vm"
+  - "strekozov.iv"
+  - "tsekhovskoy.va"
+  - "velikorodnykh.av"
+
+# Всем остальным прошедшим проверку — только чтение алертов и уязвимостей.
+indexer_readonly_for_all: true
 
 # ---------------------------------------------------------------------
 # Менеджер

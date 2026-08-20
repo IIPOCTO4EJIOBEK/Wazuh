@@ -7,23 +7,17 @@ _meta:
   type: "rolesmapping"
   config_version: 2
 
+# Администраторы платформы. Список задан переменной indexer_admin_users
+# в group_vars — правится в одном месте, а не в шаблоне.
 all_access:
   reserved: true
   hidden: false
   backend_roles:
     - "admin"
   users:
-    - "chulichkov.vm"
-    - "dulepov.av"
-    - "ermolaev.ag"
-    - "kirievskaya.es"
-    - "kotova.da"
-    - "pedko.tv"
-    - "presnov.av"
-    - "savenko.vm"
-    - "strekozov.iv"
-    - "tsekhovskoy.va"
-    - "velikorodnykh.av"
+{% for u in indexer_admin_users | default([]) %}
+    - "{{ u }}"
+{% endfor %}
   description: "Полный доступ"
 
 own_index:
@@ -52,11 +46,15 @@ wazuh_snapshot:
   backend_roles:
     - "wazuh_snapshot"
 
+# "*" — любой прошедший проверку подлинности, включая доменных
+# пользователей. Роль даёт только чтение алертов и уязвимостей.
 wazuh_reader:
   reserved: false
   users:
     - "auditor"
+{% if indexer_readonly_for_all | default(true) %}
     - "*"
+{% endif %}
   backend_roles:
     - "wazuh_reader"
 
@@ -65,7 +63,9 @@ kibana_user:
   reserved: false
   users:
     - "auditor"
+{% if indexer_readonly_for_all | default(true) %}
     - "*"
+{% endif %}
   backend_roles:
     - "wazuh_reader"
 

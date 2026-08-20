@@ -26,6 +26,9 @@
     - ahp_windows_ad_rules.xml
     - ahp_bitrix_rules.xml
     - ahp_infrastructure_rules.xml
+    # Снятие ложных срабатываний — идёт последним, чтобы перекрывать
+    # предыдущие файлы при совпадении идентификаторов.
+    - ahp_tuning.xml
   notify: restart wazuh-manager
 
 - name: Списки CDB

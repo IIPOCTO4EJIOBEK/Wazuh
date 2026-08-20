@@ -50,6 +50,6 @@ wazuh_rule_selftest_cases:
     expect_rule: "100410"
     sample: >-
       {"win":{"system":{"providerName":"disk","eventID":"153","level":"3",
-      "channel":"System","computer":"pdc-hv0.ahprostory.ru","severityValue":"WARNING"},
+      "channel":"System","computer":"pdc-hv0.rusagroeco.ru","severityValue":"WARNING"},
       "eventdata":{"data":"The IO operation at logical block address 0x0 for Disk 4
       was retried."}}}

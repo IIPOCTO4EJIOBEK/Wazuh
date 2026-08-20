@@ -34,6 +34,11 @@ vault_manager_cluster_key: "00000000000000000000000000000000"
 # Общий пароль authd. Сгенерировать: openssl rand -base64 24
 vault_agent_enrollment_password: "СМЕНИТЬ_EnrollPass"
 
+# --- Active Directory ------------------------------------------------
+# Пароль технического пользователя, под которым индексер ищет людей
+# в каталоге. Тот же, что используется Zabbix (CN=zabbix_tech).
+vault_ldap_bind_password: "СМЕНИТЬ_ПАРОЛЬ_ТЕХУЧЁТКИ"
+
 # --- ServiceDesk Plus ------------------------------------------------
 vault_servicedesk_authtoken: "СМЕНИТЬ_SDP_AUTHTOKEN"
 

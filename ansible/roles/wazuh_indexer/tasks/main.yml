@@ -94,10 +94,11 @@
     group: wazuh-indexer
     mode: "0600"
   loop:
+    - config.yml
     - internal_users.yml
     - roles.yml
     - roles_mapping.yml
-  no_log: true          # в шаблонах хеши паролей
+  no_log: true          # в шаблонах хеши паролей и пароль каталога
 
 - name: Служба запущена и включена в автозагрузку
   ansible.builtin.service:
