@@ -76,6 +76,16 @@ $Subcategories = @(
 
 $RegistrySettings = @(
     @{
+        # Без этого параметра расширенные подкатегории аудита, заданные
+        # выше, может перекрыть устаревшая политика категорий — и тогда
+        # часть событий тихо перестанет писаться. Проверка CIS 2.3.2.1
+        # на пилоте эту настройку не нашла ни на одном узле.
+        Path  = 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa'
+        Name  = 'SCENoApplyLegacyAuditPolicy'
+        Value = 1
+        Why   = 'подкатегории аудита не перекрываются устаревшей политикой'
+    }
+    @{
         Path  = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit'
         Name  = 'ProcessCreationIncludeCmdLine_Enabled'
         Value = 1
@@ -106,6 +116,10 @@ if ($ShowGpoSettings) {
   Параметры безопасности → Расширенная настройка политики аудита:
 
 $( ($Subcategories | ForEach-Object { "    {0,-42} {1}" -f $_.Name, $_.Mode }) -join "`n" )
+
+    Локальные политики → Параметры безопасности →
+        Аудит: принудительно переопределять параметры категории
+        параметрами подкатегории                          = Включено
 
 Конфигурация компьютера → Административные шаблоны:
 
